@@ -70,9 +70,9 @@ func WithTimeout[T any](d time.Duration) Option[T] {
 	return func(c *conf[T]) { c.timeout = d }
 }
 
-// WithTree carries the resource-tree options of the declaration
-// (pipeline.Parent, pipeline.Children).
-func WithTree[T any](opts ...pipeline.ResourceOption) Option[T] {
+// WithPipelineOptions carries the pipeline-level options of the
+// declaration (pipeline.Parent, pipeline.Children) into the typed call.
+func WithPipelineOptions[T any](opts ...pipeline.ResourceOption) Option[T] {
 	return func(c *conf[T]) { c.tree = append(c.tree, opts...) }
 }
 
