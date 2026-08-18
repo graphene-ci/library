@@ -24,7 +24,7 @@ import (
 // as the run's converging future and the options are carried, not yet
 // enforced server-side.
 func (c *Client) Resource(ctx pipeline.Context, obj any, opts ...pipeline.ResourceOption) pipeline.Resource[Object] {
-	manifest, name, err := toManifest(obj)
+	manifest, name, err := c.toManifest(obj)
 	self := ref.OwnerRef("k8s/" + name)
 	if ctx.Recording() {
 		ctx.RecordActivity(applyActivityName, applyActivity)
@@ -74,8 +74,10 @@ func (c *Client) Resource(ctx pipeline.Context, obj any, opts ...pipeline.Resour
 	return pipeline.NewResource[Object](ctx, self, fut)
 }
 
-// toManifest flattens any typed object into an unstructured manifest.
-func toManifest(obj any) (map[string]any, string, error) {
+// toManifest flattens any typed object into an unstructured manifest,
+// deriving apiVersion/kind from the client's scheme when the object does
+// not carry TypeMeta by hand.
+func (c *Client) toManifest(obj any) (map[string]any, string, error) {
 	var m map[string]any
 	switch v := obj.(type) {
 	case *unstructured.Unstructured:
@@ -90,9 +92,20 @@ func toManifest(obj any) (map[string]any, string, error) {
 		m = converted
 	}
 	u := unstructured.Unstructured{Object: m}
+	if u.GetKind() == "" {
+		ro, ok := obj.(runtime.Object)
+		if !ok {
+			return nil, "", fmt.Errorf("object %T carries no kind and is not a runtime.Object", obj)
+		}
+		gvks, _, err := c.scheme.ObjectKinds(ro)
+		if err != nil || len(gvks) == 0 {
+			return nil, "", fmt.Errorf("no kind for %T: teach the client with WithScheme(provider.AddToScheme): %w", obj, err)
+		}
+		u.SetGroupVersionKind(gvks[0])
+	}
 	name := u.GetName()
 	if name == "" {
 		return nil, "", fmt.Errorf("object %T has no metadata.name", obj)
 	}
-	return m, u.GetKind() + "/" + name, nil
+	return u.Object, u.GetKind() + "/" + name, nil
 }
