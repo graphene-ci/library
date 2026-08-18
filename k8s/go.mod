@@ -1,4 +1,4 @@
-module github.com/graphene-ci/library/resources/k8s
+module github.com/graphene-ci/library/k8s
 
 go 1.26.5
 
