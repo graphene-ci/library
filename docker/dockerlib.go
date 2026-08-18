@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/graphene-ci/pipeline/pkg/activity"
+	"github.com/graphene-ci/pipeline/pkg/capabilityapi"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 )
@@ -30,15 +31,16 @@ type InstallReport struct {
 }
 
 // Install brings the docker engine onto the machine — converging: an
-// engine that is already there is reported, not reinstalled. A wrapper
-// over the Activity primitive, like every library verb.
-func Install(ctx pipeline.Context, agent pipeline.AgentHandle, opts ...activity.Option) (InstallReport, error) {
-	return activity.Activity(ctx, agent, installCall(), opts...)
-}
-
-func installCall() activity.Call[InstallReport] {
+// engine that is already there is reported, not reinstalled. A library
+// verb is a Call: run it with pipelineactivity.Activity on one agent or
+// pipelineactivity.ActivityAll on a selection.
+func Install() activity.Call[InstallReport] {
 	return activity.Fn0("docker.install", func(ctx context.Context) (InstallReport, error) {
 		if version, err := dockerVersion(ctx); err == nil {
+			// Already there — still publish: the record must know.
+			if err := publish(ctx, version); err != nil {
+				return InstallReport{}, err
+			}
 			return InstallReport{Version: version}, nil
 		}
 		script := exec.CommandContext(ctx, "sh", "-c", "curl -fsSL https://get.docker.com | sh")
@@ -49,7 +51,21 @@ func installCall() activity.Call[InstallReport] {
 		if err != nil {
 			return InstallReport{}, err
 		}
+		if err := publish(ctx, version); err != nil {
+			return InstallReport{}, err
+		}
 		return InstallReport{Version: version, Installed: true}, nil
+	})
+}
+
+// publish records what this body just made true, right where it
+// happened: capability "docker" on the machine this container runs on.
+func publish(ctx context.Context, version string) error {
+	return capabilityapi.PublishSelf(ctx, pipeline.Capability{
+		Name:      "docker",
+		Version:   version,
+		BroughtBy: "dockerlib.Install",
+		Ready:     true,
 	})
 }
 
@@ -78,14 +94,19 @@ const (
 //
 // TODO(tree): the durable record lands with the server-side tree
 // support; the parent link is carried, not yet enforced server-side.
-func Container(ctx pipeline.Context, agent pipeline.AgentHandle, spec Spec, opts ...pipeline.ResourceOption) pipeline.Resource[Info] {
+func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pipeline.ResourceOption) pipeline.Resource[Info] {
 	self := ref.OwnerRef("docker/" + spec.Name)
 	if ctx.Recording() {
 		ctx.RecordActivity(runActivityName, runActivity)
 		ctx.RecordActivity(removeActivityName, removeActivity)
 		return pipeline.NewResource[Info](ctx, self, nil)
 	}
-	opts = append([]pipeline.ResourceOption{pipeline.Parent(agent)}, opts...)
+	// Parent only when the agent is OURS: a handle in the tree. A
+	// foreign agent has no ResourceRef — the container stays owned by
+	// the run, what is not yours cannot be burdened.
+	if h, ok := agent.(pipeline.Handle); ok {
+		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
+	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
 	_ = o // carried into the record when the server tree lands
 	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), workflow.ActivityOptions{
