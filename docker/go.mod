@@ -1,4 +1,4 @@
-module github.com/graphene-ci/library/activities/docker
+module github.com/graphene-ci/library/docker
 
 go 1.26.5
 
