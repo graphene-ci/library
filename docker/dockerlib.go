@@ -30,8 +30,13 @@ type InstallReport struct {
 }
 
 // Install brings the docker engine onto the machine — converging: an
-// engine that is already there is reported, not reinstalled.
-func Install() activity.Call[InstallReport] {
+// engine that is already there is reported, not reinstalled. A wrapper
+// over the Activity primitive, like every library verb.
+func Install(ctx pipeline.Context, agent pipeline.AgentHandle, opts ...activity.Option) (InstallReport, error) {
+	return activity.Activity(ctx, agent, installCall(), opts...)
+}
+
+func installCall() activity.Call[InstallReport] {
 	return activity.Fn0("docker.install", func(ctx context.Context) (InstallReport, error) {
 		if version, err := dockerVersion(ctx); err == nil {
 			return InstallReport{Version: version}, nil
