@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/graphene-ci/pipeline v0.0.0-20260818133653-6e0c7e4549f2
+	github.com/graphene-ci/pipeline v0.0.0-20260818144554-48ca5450afca
 	go.temporal.io/sdk v1.47.0
 )
 
