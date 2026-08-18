@@ -7,6 +7,8 @@
 package k8slib
 
 import (
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 )
 
@@ -15,11 +17,32 @@ import (
 // factory, safe in workflow code.
 type Client struct {
 	kubeconfig pipeline.SecretRef
+	scheme     *runtime.Scheme
+}
+
+// Option tunes the client.
+type Option func(*Client)
+
+// WithScheme teaches the client the types of a provider (its generated
+// AddToScheme), so objects need no hand-written TypeMeta — the
+// apiVersion and kind are derived from the Go type.
+func WithScheme(builders ...func(*runtime.Scheme) error) Option {
+	return func(c *Client) {
+		for _, add := range builders {
+			// A type set that cannot register is a programming error in
+			// the provider package; surface it at first use instead.
+			_ = add(c.scheme)
+		}
+	}
 }
 
 // NewClientFromSecret builds the client from the kubeconfig secret ref.
-func NewClientFromSecret(kubeconfig pipeline.SecretRef) *Client {
-	return &Client{kubeconfig: kubeconfig}
+func NewClientFromSecret(kubeconfig pipeline.SecretRef, opts ...Option) *Client {
+	c := &Client{kubeconfig: kubeconfig, scheme: runtime.NewScheme()}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Object is the output of a converged Kubernetes resource.
