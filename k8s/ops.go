@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -12,36 +14,36 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/secretsapi"
 )
 
-// Activity names — the library's wire identities.
+// Ops activity names — the library's wire identities. The bodies run on
+// the run's worker: the kubeconfig resolves at the point of use and
+// never leaves the run's contour.
 const (
 	applyActivityName   = "k8s.apply"
 	observeActivityName = "k8s.observe"
 	deleteActivityName  = "k8s.delete"
 )
 
-// request travels to every k8s activity: which cluster (by secret NAME)
-// and which object.
-type request struct {
+// opRequest travels to every ops activity: which cluster (by secret
+// NAME) and which object.
+type opRequest struct {
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
 	Manifest   map[string]any     `json:"manifest"`
 }
 
 // observation is what observe reports back.
 type observation struct {
-	Ready    bool           `json:"ready"`
-	Id       string         `json:"id,omitempty"`
+	Exists   bool           `json:"exists"`
 	Manifest map[string]any `json:"manifest,omitempty"`
 }
 
 // applyActivity server-side-applies the manifest. Idempotent by
 // construction — SSA converges.
-func applyActivity(ctx context.Context, req request) error {
+func applyActivity(ctx context.Context, req opRequest) error {
 	cli, gvr, u, err := dial(ctx, req)
 	if err != nil {
 		return err
@@ -51,30 +53,24 @@ func applyActivity(ctx context.Context, req request) error {
 	return err
 }
 
-// observeActivity reads the live object and derives readiness: the
-// crossplane/kstatus convention — condition Ready=True — with plain
-// existence as the fallback for objects without conditions.
-func observeActivity(ctx context.Context, req request) (observation, error) {
+// observeActivity reads the live object.
+func observeActivity(ctx context.Context, req opRequest) (observation, error) {
 	cli, gvr, u, err := dial(ctx, req)
 	if err != nil {
 		return observation{}, err
 	}
 	live, err := cli.Resource(gvr).Namespace(u.GetNamespace()).Get(ctx, u.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		return observation{Ready: false}, nil
+		return observation{Exists: false}, nil
 	}
 	if err != nil {
 		return observation{}, err
 	}
-	return observation{
-		Ready:    isReady(live),
-		Id:       externalName(live),
-		Manifest: live.Object,
-	}, nil
+	return observation{Exists: true, Manifest: live.Object}, nil
 }
 
 // deleteActivity removes the object; absence is success.
-func deleteActivity(ctx context.Context, req request) error {
+func deleteActivity(ctx context.Context, req opRequest) error {
 	cli, gvr, u, err := dial(ctx, req)
 	if err != nil {
 		return err
@@ -88,7 +84,7 @@ func deleteActivity(ctx context.Context, req request) error {
 
 // dial resolves the kubeconfig secret AT THE POINT OF USE and builds the
 // dynamic client plus the REST mapping for the object.
-func dial(ctx context.Context, req request) (dynamic.Interface, schema.GroupVersionResource, *unstructured.Unstructured, error) {
+func dial(ctx context.Context, req opRequest) (dynamic.Interface, schema.GroupVersionResource, *unstructured.Unstructured, error) {
 	u := &unstructured.Unstructured{Object: req.Manifest}
 	value, err := secretsapi.Resolve(ctx, req.Kubeconfig)
 	if err != nil {
@@ -115,8 +111,8 @@ func dial(ctx context.Context, req request) (dynamic.Interface, schema.GroupVers
 	return cli, mapping.Resource, u, nil
 }
 
-// isReady follows the Ready condition convention; an object without
-// conditions is ready by existing.
+// isReady follows the Ready condition convention (crossplane/kstatus);
+// an object without conditions is ready by existing.
 func isReady(u *unstructured.Unstructured) bool {
 	conditions, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found {
@@ -132,13 +128,4 @@ func isReady(u *unstructured.Unstructured) bool {
 		}
 	}
 	return false
-}
-
-// externalName is the crossplane external name — the provider's real
-// id — with the object name as the fallback.
-func externalName(u *unstructured.Unstructured) string {
-	if v := u.GetAnnotations()["crossplane.io/external-name"]; v != "" {
-		return v
-	}
-	return u.GetName()
 }

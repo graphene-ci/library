@@ -20,13 +20,13 @@ type Client struct {
 	scheme     *runtime.Scheme
 }
 
-// Option tunes the client.
-type Option func(*Client)
+// ClientOption tunes the client.
+type ClientOption func(*Client)
 
 // WithScheme teaches the client the types of a provider (its generated
 // AddToScheme), so objects need no hand-written TypeMeta — the
 // apiVersion and kind are derived from the Go type.
-func WithScheme(builders ...func(*runtime.Scheme) error) Option {
+func WithScheme(builders ...func(*runtime.Scheme) error) ClientOption {
 	return func(c *Client) {
 		for _, add := range builders {
 			// A type set that cannot register is a programming error in
@@ -37,19 +37,10 @@ func WithScheme(builders ...func(*runtime.Scheme) error) Option {
 }
 
 // NewClientFromSecret builds the client from the kubeconfig secret ref.
-func NewClientFromSecret(kubeconfig pipeline.SecretRef, opts ...Option) *Client {
+func NewClientFromSecret(kubeconfig pipeline.SecretRef, opts ...ClientOption) *Client {
 	c := &Client{kubeconfig: kubeconfig, scheme: runtime.NewScheme()}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
-}
-
-// Object is the output of a converged Kubernetes resource.
-type Object struct {
-	// Id is the crossplane external name when the object is a managed
-	// resource (the provider's real-world id), the object name otherwise.
-	Id string `json:"id"`
-	// Manifest is the live object.
-	Manifest map[string]any `json:"manifest,omitempty"`
 }
