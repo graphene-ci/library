@@ -93,6 +93,7 @@ func Resource[T any](ctx pipeline.Context, c *Client, obj *T, opts ...Option[T])
 
 	if ctx.Recording() {
 		if err == nil {
+			ctx.RecordKind(kindKey)
 			ensureKindRecorded(ctx, kindKey, cfg)
 		}
 		return pipeline.NewResource[*T](ctx, self, nil)
@@ -117,7 +118,7 @@ func Resource[T any](ctx pipeline.Context, c *Client, obj *T, opts ...Option[T])
 		TaskQueue: wire.RunQueue(ctx.RunId()),
 		Labels:    o.Labels,
 		RunId:     string(ctx.RunId()),
-		Spec:      k8sSpec{Manifest: manifest, Kubeconfig: c.kubeconfig},
+		Spec:      k8sSpec{Manifest: manifest, Kubeconfig: c.kubeconfig, Owner: o.Parent},
 	}
 	workflow.Go(ctx, func(gctx workflow.Context) {
 		actx := workflow.WithActivityOptions(gctx, workflow.ActivityOptions{

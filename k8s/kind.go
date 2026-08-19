@@ -11,7 +11,9 @@ import (
 	"go.temporal.io/sdk/workflow"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
+	"github.com/graphene-ci/pipeline/pkg/ref"
 )
 
 // Every Kubernetes resource is a temporal-entity: Init = server-side
@@ -25,6 +27,8 @@ import (
 type k8sSpec struct {
 	Manifest   map[string]any     `json:"manifest"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
+	// Owner is the initial owner in the tree (the run by default).
+	Owner ref.OwnerRef `json:"owner,omitempty"`
 }
 
 // k8sState is the entity state: the live object and the heal history.
@@ -36,13 +40,15 @@ type k8sState struct {
 	Heals      int                `json:"heals,omitempty"`
 	Drifted    bool               `json:"drifted,omitempty"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
+	// Owned is the tree half: current owner, transfer command, the
+	// EntityOwner/KeepUntil mirrors.
+	ownership.State
 }
 
 // kindConfig is the per-kind knowledge, wrapped untyped.
 type kindConfig struct {
 	ready          func(live map[string]any) (bool, error)
 	drifted        func(desired, live map[string]any) (bool, error)
-	validate       func(desired map[string]any) error
 	reconcileEvery time.Duration
 	pollInterval   time.Duration
 	timeout        time.Duration
@@ -97,6 +103,8 @@ func ensureKind(key string, cfg kindConfig) *kindEntry {
 		entdefine.WithReconcileEvery[k8sSpec, k8sState](cfg.reconcileEvery, e.reconcileEntity),
 		entdefine.WithSearchAttributes[k8sSpec, k8sState](true),
 	)
+	// The tree half: k8s resources are owned like every system record.
+	ownership.Register(e.def, func(s *k8sState) *ownership.State { return &s.State })
 	kinds.m[key] = e
 	return e
 }
@@ -126,6 +134,10 @@ func (e *kindEntry) activityCtx(ctx workflow.Context) workflow.Context {
 // knowledge says so.
 func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, error) {
 	var st k8sState
+	owner := spec.Owner
+	if owner != "" {
+		ownership.Init(ctx, &st.State, owner)
+	}
 	actx := e.activityCtx(ctx)
 	req := opRequest{Kubeconfig: spec.Kubeconfig, Manifest: spec.Manifest}
 	if err := workflow.ExecuteActivity(actx, applyActivityName, req).Get(ctx, nil); err != nil {
