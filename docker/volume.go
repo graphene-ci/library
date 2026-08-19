@@ -2,6 +2,7 @@ package dockerlib
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -27,21 +28,22 @@ const (
 )
 
 // Volume declares a docker volume on the agent's machine as an
-// ordinary resource — it dies with its owner (data of a stand without
-// the stand is garbage). The spec is docker's OWN type.
+// ordinary resource — an owned entity record; the data dies with its
+// owner. The spec is docker's OWN type.
 func Volume(ctx pipeline.Context, agent pipeline.Agent, spec volume.CreateOptions, opts ...pipeline.ResourceOption) pipeline.Resource[VolumeInfo] {
-	self := ref.OwnerRef("docker-volume/" + spec.Name)
+	self := ref.OwnerRef(string(VolumeKind) + "/" + spec.Name)
 	if ctx.Recording() {
-		ctx.RecordActivity(volumeEnsureActivityName, volumeEnsureActivity)
-		ctx.RecordActivity(volumeRemoveActivityName, volumeRemoveActivity)
+		recordEntities(ctx)
 		return pipeline.NewResource[VolumeInfo](ctx, self, nil)
 	}
 	if h, ok := agent.(pipeline.Handle); ok {
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
-	_ = o // carried into the record when the server tree lands
-	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), volumeEnsureActivityName, spec)
+	raw, _ := json.Marshal(volumeSpec{Options: spec, Owner: o.Parent})
+	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
+		Kind: VolumeKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
+	})
 	return pipeline.NewResource[VolumeInfo](ctx, self, fut)
 }
 

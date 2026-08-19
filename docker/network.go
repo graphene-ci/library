@@ -2,6 +2,7 @@ package dockerlib
 
 import (
 	"context"
+	"encoding/json"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/network"
@@ -30,20 +31,21 @@ const (
 )
 
 // Network declares a docker network on the agent's machine as an
-// ordinary resource — it dies with its owner.
+// ordinary resource — an owned entity record; it dies with its owner.
 func Network(ctx pipeline.Context, agent pipeline.Agent, spec NetworkSpec, opts ...pipeline.ResourceOption) pipeline.Resource[NetworkInfo] {
-	self := ref.OwnerRef("docker-network/" + spec.Name)
+	self := ref.OwnerRef(string(NetworkKind) + "/" + spec.Name)
 	if ctx.Recording() {
-		ctx.RecordActivity(networkEnsureActivityName, networkEnsureActivity)
-		ctx.RecordActivity(networkRemoveActivityName, networkRemoveActivity)
+		recordEntities(ctx)
 		return pipeline.NewResource[NetworkInfo](ctx, self, nil)
 	}
 	if h, ok := agent.(pipeline.Handle); ok {
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
-	_ = o // carried into the record when the server tree lands
-	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), networkEnsureActivityName, spec)
+	raw, _ := json.Marshal(networkSpec{Spec: spec, Owner: o.Parent})
+	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
+		Kind: NetworkKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
+	})
 	return pipeline.NewResource[NetworkInfo](ctx, self, fut)
 }
 
