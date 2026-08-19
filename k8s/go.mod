@@ -3,8 +3,8 @@ module github.com/graphene-ci/library/k8s
 go 1.26.5
 
 require (
-	github.com/graphene-ci/pipeline v0.0.0-20260818144554-48ca5450afca
-	github.com/graphene-ci/temporal-entity v0.0.0-20260818135158-717d0ab8b0f7
+	github.com/graphene-ci/pipeline v0.0.0-20260819090736-0eaae561cd9b
+	github.com/graphene-ci/temporal-entity v0.0.0-20260819090436-ae248ff4d338
 	go.temporal.io/sdk v1.47.0
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3

@@ -111,11 +111,12 @@ func Resource[T any](ctx pipeline.Context, c *Client, obj *T, opts ...Option[T])
 		}
 	}
 	o := pipeline.BuildResourceOptions(ctx, cfg.tree)
-	_ = o // carried into the record when the server-side tree lands
 	req := declareRequest{
 		Kind:      kindKey,
 		Name:      name,
 		TaskQueue: wire.RunQueue(ctx.RunId()),
+		Labels:    o.Labels,
+		RunId:     string(ctx.RunId()),
 		Spec:      k8sSpec{Manifest: manifest, Kubeconfig: c.kubeconfig},
 	}
 	workflow.Go(ctx, func(gctx workflow.Context) {
@@ -202,10 +203,12 @@ const declareActivityName = "k8s.entity.declare"
 
 // declareRequest asks the declare activity for one entity.
 type declareRequest struct {
-	Kind      string  `json:"kind"`
-	Name      string  `json:"name"`
-	TaskQueue string  `json:"taskQueue"`
-	Spec      k8sSpec `json:"spec"`
+	Kind      string            `json:"kind"`
+	Name      string            `json:"name"`
+	TaskQueue string            `json:"taskQueue"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	RunId     string            `json:"runId,omitempty"`
+	Spec      k8sSpec           `json:"spec"`
 }
 
 var declareRecorded bool // recording pass is single-threaded, pre-worker
@@ -228,9 +231,19 @@ func makeDeclare(cl client.Client) func(context.Context, declareRequest) (k8sSta
 		if err != nil {
 			return k8sState{}, err
 		}
+		if err := wire.ValidateUserLabels(req.Labels); err != nil {
+			return k8sState{}, err
+		}
+		labels := make(map[string]string, len(req.Labels)+1)
+		for k, v := range req.Labels {
+			labels[k] = v
+		}
+		if req.RunId != "" {
+			labels[wire.LabelRun] = req.RunId
+		}
 		entities := entclient.Bind(e.def, cl, req.TaskQueue)
 		rid := entity.ResourceID(req.Name)
-		if _, err := entities.CreateOrAttach(ctx, rid, req.Spec); err != nil {
+		if _, err := entities.CreateOrAttach(ctx, rid, req.Spec, entclient.WithLabels(labels)); err != nil {
 			return k8sState{}, err
 		}
 		for {
