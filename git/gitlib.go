@@ -28,6 +28,12 @@ import (
 	"github.com/graphene-ci/pipeline/pkg/secretsapi"
 )
 
+// errTailBytes bounds the output tail embedded in error messages: the
+// failure must be diagnosable straight from the Temporal history event,
+// but history is written on every retry — the FULL output lives in the
+// log stream, only the tail travels with the error.
+const errTailBytes = 2048
+
 // InstallReport is what Install returns.
 type InstallReport struct {
 	Version string `json:"version"`
@@ -54,7 +60,7 @@ elif command -v apk >/dev/null 2>&1; then apk add --no-cache git
 elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install git
 else echo "no known package manager" >&2; exit 1
 fi`
-		if out, err := obs.RunTail(ctx, machine.Shell(ctx, script), 2048); err != nil {
+		if out, err := obs.RunTail(ctx, machine.Shell(ctx, script), errTailBytes); err != nil {
 			return InstallReport{}, fmt.Errorf("install git: %w: %s", err, out)
 		}
 		version, err := gitVersion(ctx)
@@ -165,7 +171,7 @@ func runGit(ctx context.Context, dir string, extraArgs, extraEnv []string, args 
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", firstWord(args), err, tail(string(out), 2048))
+		return "", fmt.Errorf("git %s: %w: %s", firstWord(args), err, tail(string(out), errTailBytes))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -177,7 +183,7 @@ func streamGit(ctx context.Context, dir string, extraArgs, extraEnv []string, ar
 	if err != nil {
 		return err
 	}
-	if out, err := obs.RunTail(ctx, cmd, 2048); err != nil {
+	if out, err := obs.RunTail(ctx, cmd, errTailBytes); err != nil {
 		return fmt.Errorf("git %s: %w: %s", firstWord(args), err, out)
 	}
 	return nil
