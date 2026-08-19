@@ -95,6 +95,7 @@ func ensureKind(key string, cfg kindConfig) *kindEntry {
 		entdefine.WithInit[k8sSpec, k8sState](e.initEntity),
 		entdefine.WithFinalize[k8sSpec, k8sState](e.finalizeEntity),
 		entdefine.WithReconcileEvery[k8sSpec, k8sState](cfg.reconcileEvery, e.reconcileEntity),
+		entdefine.WithSearchAttributes[k8sSpec, k8sState](true),
 	)
 	kinds.m[key] = e
 	return e
@@ -215,4 +216,3 @@ func (e *kindEntry) finalizeEntity(ctx workflow.Context, st *k8sState) error {
 		}
 	}
 }
-
