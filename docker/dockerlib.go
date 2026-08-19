@@ -8,17 +8,14 @@ package dockerlib
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
-	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
-	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/workflow"
 
 	"github.com/graphene-ci/pipeline/pkg/activity"
 	"github.com/graphene-ci/pipeline/pkg/capabilityapi"
+	"github.com/graphene-ci/pipeline/pkg/machine"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 )
@@ -43,7 +40,7 @@ func Install() activity.Call[InstallReport] {
 			}
 			return InstallReport{Version: version}, nil
 		}
-		script := exec.CommandContext(ctx, "sh", "-c", "curl -fsSL https://get.docker.com | sh")
+		script := machine.Shell(ctx, "curl -fsSL https://get.docker.com | sh")
 		if out, err := script.CombinedOutput(); err != nil {
 			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, tail(string(out), 2048))
 		}
@@ -109,15 +106,7 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
 	_ = o // carried into the record when the server tree lands
-	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		HeartbeatTimeout:    time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    time.Second,
-			BackoffCoefficient: 2,
-			MaximumInterval:    time.Minute,
-		},
-	}, runActivityName, spec)
+	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), runActivityName, spec)
 	return pipeline.NewResource[Info](ctx, self, fut)
 }
 
@@ -156,18 +145,26 @@ func removeActivity(ctx context.Context, spec Spec) error {
 	}
 	defer func() { _ = cli.Close() }()
 	err = cli.ContainerRemove(ctx, spec.Name, container.RemoveOptions{Force: true})
-	if err != nil && !dockerclient.IsErrNotFound(err) {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	return nil
 }
 
+// dockerVersion asks the daemon over the API — no CLI involved, works
+// in both runtimes (the agent points DOCKER_HOST at the machine's
+// socket).
 func dockerVersion(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}").Output()
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = cli.Close() }()
+	v, err := cli.ServerVersion(ctx)
 	if err != nil {
 		return "", fmt.Errorf("docker not available: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return v.Version, nil
 }
 
 func tail(s string, n int) string {

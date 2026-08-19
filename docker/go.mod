@@ -3,15 +3,15 @@ module github.com/graphene-ci/library/docker
 go 1.26.5
 
 require (
+	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/graphene-ci/pipeline v0.0.0-20260818144554-48ca5450afca
+	github.com/graphene-ci/pipeline v0.0.0-20260819102633-ee7d425099f3
 	go.temporal.io/sdk v1.47.0
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
