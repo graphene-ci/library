@@ -17,6 +17,11 @@ import (
 	"github.com/graphene-ci/pipeline/pkg/obs"
 )
 
+// errTailBytes bounds the output tail embedded in error messages (the
+// full output streams as log records); buildx is wordier than most,
+// hence the larger tail.
+const errTailBytes = 4096
+
 // BuildSpec describes one image build. Paths (Context, File) must be
 // machine-valid — put the context under machine.Workspace() and this
 // holds by construction (same absolute path in the container, on the
@@ -105,7 +110,7 @@ func buildActivity(ctx context.Context, spec BuildSpec) (BuildReport, error) {
 
 	cmd := machine.Command(ctx, bin, args...)
 	stop := heartbeat(ctx, "building "+spec.Context)
-	out, err := obs.RunTail(ctx, cmd, 4096)
+	out, err := obs.RunTail(ctx, cmd, errTailBytes)
 	stop()
 	if err != nil {
 		return BuildReport{}, fmt.Errorf("docker build: %w: %s", err, out)

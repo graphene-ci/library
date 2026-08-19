@@ -42,7 +42,7 @@ func Install() activity.Call[InstallReport] {
 			return InstallReport{Version: version}, nil
 		}
 		script := machine.Shell(ctx, "curl -fsSL https://get.docker.com | sh")
-		if out, err := obs.RunTail(ctx, script, 2048); err != nil {
+		if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
 			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
 		}
 		version, err := dockerVersion(ctx)
