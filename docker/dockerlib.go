@@ -7,6 +7,7 @@ package dockerlib
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -87,16 +88,13 @@ const (
 )
 
 // Container declares a container on the agent's machine as an ORDINARY
-// resource: parented to the agent (it dies with it), visible in CLI/UI —
-// only this code has it hidden behind sugar.
-//
-// TODO(tree): the durable record lands with the server-side tree
-// support; the parent link is carried, not yet enforced server-side.
+// resource: an entity record in the tree — owned, cascaded,
+// transferable to a stand. Its lifecycle runs on this agent's own
+// executor, which lives while the record does.
 func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pipeline.ResourceOption) pipeline.Resource[Info] {
-	self := ref.OwnerRef("docker/" + spec.Name)
+	self := ref.OwnerRef(string(ContainerKind) + "/" + spec.Name)
 	if ctx.Recording() {
-		ctx.RecordActivity(runActivityName, runActivity)
-		ctx.RecordActivity(removeActivityName, removeActivity)
+		recordEntities(ctx)
 		return pipeline.NewResource[Info](ctx, self, nil)
 	}
 	// Parent only when the agent is OURS: a handle in the tree. A
@@ -106,8 +104,10 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
-	_ = o // carried into the record when the server tree lands
-	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), runActivityName, spec)
+	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent})
+	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
+		Kind: ContainerKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
+	})
 	return pipeline.NewResource[Info](ctx, self, fut)
 }
 
