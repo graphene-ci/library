@@ -110,7 +110,7 @@ func tagActivity(ctx context.Context, spec TagSpec) (TagReport, error) {
 			return TagReport{}, err
 		}
 		defer cleanup()
-		if _, err := runGit(ctx, spec.Dir, extraArgs, extraEnv, "push", "origin", "refs/tags/"+spec.Name); err != nil {
+		if err := streamGit(ctx, spec.Dir, extraArgs, extraEnv, "push", "origin", "refs/tags/"+spec.Name); err != nil {
 			return TagReport{}, err
 		}
 	}
@@ -183,7 +183,7 @@ func commitActivity(ctx context.Context, spec CommitSpec) (CommitReport, error) 
 			return CommitReport{}, err
 		}
 		defer cleanup()
-		if _, err := runGit(ctx, spec.Dir, extraArgs, extraEnv, "push", "origin", "HEAD"); err != nil {
+		if err := streamGit(ctx, spec.Dir, extraArgs, extraEnv, "push", "origin", "HEAD"); err != nil {
 			return CommitReport{}, err
 		}
 	}

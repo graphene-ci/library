@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/graphene-ci/pipeline/pkg/activity"
 	"github.com/graphene-ci/pipeline/pkg/capabilityapi"
 	"github.com/graphene-ci/pipeline/pkg/machine"
+	"github.com/graphene-ci/pipeline/pkg/obs"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 	"github.com/graphene-ci/pipeline/pkg/secretsapi"
@@ -52,8 +54,8 @@ elif command -v apk >/dev/null 2>&1; then apk add --no-cache git
 elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install git
 else echo "no known package manager" >&2; exit 1
 fi`
-		if out, err := machine.Shell(ctx, script).CombinedOutput(); err != nil {
-			return InstallReport{}, fmt.Errorf("install git: %w: %s", err, tail(string(out), 2048))
+		if out, err := obs.RunTail(ctx, machine.Shell(ctx, script), 2048); err != nil {
+			return InstallReport{}, fmt.Errorf("install git: %w: %s", err, out)
 		}
 		version, err := gitVersion(ctx)
 		if err != nil {
@@ -154,11 +156,37 @@ func gitEnv(ctx context.Context, auth Auth) (args []string, env []string, cleanu
 	return args, env, cleanup, nil
 }
 
-// runGit executes one git invocation on the machine.
+// runGit executes one git invocation on the machine; its output is
+// DATA (rev-parse, status) — captured, never streamed.
 func runGit(ctx context.Context, dir string, extraArgs, extraEnv []string, args ...string) (string, error) {
-	bin, err := gitBinary()
+	cmd, err := gitCommand(ctx, dir, extraArgs, extraEnv, args...)
 	if err != nil {
 		return "", err
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", firstWord(args), err, tail(string(out), 2048))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// streamGit executes one long git invocation (fetch, push, submodule),
+// streaming its progress as live log records on the activity.
+func streamGit(ctx context.Context, dir string, extraArgs, extraEnv []string, args ...string) error {
+	cmd, err := gitCommand(ctx, dir, extraArgs, extraEnv, args...)
+	if err != nil {
+		return err
+	}
+	if out, err := obs.RunTail(ctx, cmd, 2048); err != nil {
+		return fmt.Errorf("git %s: %w: %s", firstWord(args), err, out)
+	}
+	return nil
+}
+
+func gitCommand(ctx context.Context, dir string, extraArgs, extraEnv []string, args ...string) (*exec.Cmd, error) {
+	bin, err := gitBinary()
+	if err != nil {
+		return nil, err
 	}
 	full := append(append([]string{}, extraArgs...), args...)
 	cmd := machine.Command(ctx, bin, full...)
@@ -171,11 +199,7 @@ func runGit(ctx context.Context, dir string, extraArgs, extraEnv []string, args 
 		}
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", firstWord(args), err, tail(string(out), 2048))
-	}
-	return strings.TrimSpace(string(out)), nil
+	return cmd, nil
 }
 
 func firstWord(args []string) string {
