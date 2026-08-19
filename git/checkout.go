@@ -101,7 +101,7 @@ func checkoutActivity(ctx context.Context, spec Spec) (Report, error) {
 		}
 	}
 
-	fetch := []string{"fetch", "--quiet"}
+	fetch := []string{"fetch", "--progress"}
 	if spec.Depth > 0 {
 		fetch = append(fetch, fmt.Sprintf("--depth=%d", spec.Depth))
 	}
@@ -110,18 +110,18 @@ func checkoutActivity(ctx context.Context, spec Spec) (Report, error) {
 		target = "HEAD"
 	}
 	fetch = append(fetch, "origin", target)
-	if _, err := runGit(ctx, dir, extraArgs, extraEnv, fetch...); err != nil {
+	if err := streamGit(ctx, dir, extraArgs, extraEnv, fetch...); err != nil {
 		return Report{}, err
 	}
 	if _, err := runGit(ctx, dir, nil, nil, "checkout", "--force", "--quiet", "FETCH_HEAD"); err != nil {
 		return Report{}, err
 	}
 	if spec.Submodules {
-		sub := []string{"submodule", "update", "--init", "--recursive", "--quiet"}
+		sub := []string{"submodule", "update", "--init", "--recursive"}
 		if spec.Depth > 0 {
 			sub = append(sub, fmt.Sprintf("--depth=%d", spec.Depth))
 		}
-		if _, err := runGit(ctx, dir, extraArgs, extraEnv, sub...); err != nil {
+		if err := streamGit(ctx, dir, extraArgs, extraEnv, sub...); err != nil {
 			return Report{}, err
 		}
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/graphene-ci/pipeline/pkg/activity"
 	"github.com/graphene-ci/pipeline/pkg/capabilityapi"
 	"github.com/graphene-ci/pipeline/pkg/machine"
+	"github.com/graphene-ci/pipeline/pkg/obs"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 )
@@ -41,8 +42,8 @@ func Install() activity.Call[InstallReport] {
 			return InstallReport{Version: version}, nil
 		}
 		script := machine.Shell(ctx, "curl -fsSL https://get.docker.com | sh")
-		if out, err := script.CombinedOutput(); err != nil {
-			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, tail(string(out), 2048))
+		if out, err := obs.RunTail(ctx, script, 2048); err != nil {
+			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
 		}
 		version, err := dockerVersion(ctx)
 		if err != nil {

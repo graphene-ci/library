@@ -14,6 +14,7 @@ import (
 
 	"github.com/graphene-ci/pipeline/pkg/activity"
 	"github.com/graphene-ci/pipeline/pkg/machine"
+	"github.com/graphene-ci/pipeline/pkg/obs"
 )
 
 // BuildSpec describes one image build. Paths (Context, File) must be
@@ -104,10 +105,10 @@ func buildActivity(ctx context.Context, spec BuildSpec) (BuildReport, error) {
 
 	cmd := machine.Command(ctx, bin, args...)
 	stop := heartbeat(ctx, "building "+spec.Context)
-	out, err := cmd.CombinedOutput()
+	out, err := obs.RunTail(ctx, cmd, 4096)
 	stop()
 	if err != nil {
-		return BuildReport{}, fmt.Errorf("docker build: %w: %s", err, tail(string(out), 4096))
+		return BuildReport{}, fmt.Errorf("docker build: %w: %s", err, out)
 	}
 	report := BuildReport{Tags: spec.Tags}
 	raw, err := os.ReadFile(metaFile) //nolint:gosec // our own temp file
