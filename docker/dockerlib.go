@@ -43,12 +43,17 @@ func Install() activity.Call[InstallReport] {
 			return InstallReport{Version: version}, nil
 		}
 		// get.docker.com geo-blocks some networks; the distro package
-		// is the fallback.
+		// is the fallback. Package hooks must not start services inside
+		// the chroot (policy-rc.d 101) — the daemon is brought up
+		// through the host's systemd afterwards.
 		script := machine.Shell(ctx,
-			"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null; then "+
+			"printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; "+
+				"trap 'rm -f /usr/sbin/policy-rc.d' EXIT; "+
+				"export DEBIAN_FRONTEND=noninteractive; "+
+				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null; then "+
 				"sh /tmp/get-docker.sh; "+
 				"elif command -v apt-get >/dev/null 2>&1; then "+
-				"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io; "+
+				"apt-get update -qq && apt-get install -y -qq docker.io; "+
 				"elif command -v dnf >/dev/null 2>&1; then dnf install -y -q moby-engine; "+
 				"else echo 'no way to install docker' >&2; exit 1; fi")
 		if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
