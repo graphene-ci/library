@@ -260,3 +260,12 @@ func declareOne[Spec, State any](ctx context.Context, cl *entclient.Client[Spec,
 		}
 	}
 }
+
+// planOpts renders the constructor's options for the PLAN as they will
+// resolve at run time: an owned agent handle becomes the parent.
+func planOpts(agent pipeline.Agent, opts []pipeline.ResourceOption) []pipeline.ResourceOption {
+	if h, ok := agent.(pipeline.Handle); ok {
+		return append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
+	}
+	return opts
+}

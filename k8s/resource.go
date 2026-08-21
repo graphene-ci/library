@@ -96,6 +96,7 @@ func Resource[T any](ctx pipeline.Context, c *Client, obj *T, opts ...Option[T])
 			ctx.RecordKind(kindKey)
 			ensureKindRecorded(ctx, kindKey, cfg)
 		}
+		ctx.RecordDeclare(self, pipeline.BuildResourceOptions(ctx, cfg.tree))
 		return pipeline.NewResource[*T](ctx, self, nil)
 	}
 
