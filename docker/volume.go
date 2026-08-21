@@ -34,6 +34,7 @@ func Volume(ctx pipeline.Context, agent pipeline.Agent, spec volume.CreateOption
 	self := ref.OwnerRef(string(VolumeKind) + "/" + spec.Name)
 	if ctx.Recording() {
 		recordEntities(ctx)
+		ctx.RecordDeclare(self, pipeline.BuildResourceOptions(ctx, planOpts(agent, opts)))
 		return pipeline.NewResource[VolumeInfo](ctx, self, nil)
 	}
 	if h, ok := agent.(pipeline.Handle); ok {

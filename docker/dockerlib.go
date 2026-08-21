@@ -95,6 +95,7 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 	self := ref.OwnerRef(string(ContainerKind) + "/" + spec.Name)
 	if ctx.Recording() {
 		recordEntities(ctx)
+		ctx.RecordDeclare(self, pipeline.BuildResourceOptions(ctx, planOpts(agent, opts)))
 		return pipeline.NewResource[Info](ctx, self, nil)
 	}
 	// Parent only when the agent is OURS: a handle in the tree. A

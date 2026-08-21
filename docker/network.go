@@ -36,6 +36,7 @@ func Network(ctx pipeline.Context, agent pipeline.Agent, spec NetworkSpec, opts 
 	self := ref.OwnerRef(string(NetworkKind) + "/" + spec.Name)
 	if ctx.Recording() {
 		recordEntities(ctx)
+		ctx.RecordDeclare(self, pipeline.BuildResourceOptions(ctx, planOpts(agent, opts)))
 		return pipeline.NewResource[NetworkInfo](ctx, self, nil)
 	}
 	if h, ok := agent.(pipeline.Handle); ok {
