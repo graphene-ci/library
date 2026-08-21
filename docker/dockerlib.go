@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 
 	"github.com/graphene-ci/pipeline/pkg/activity"
@@ -148,6 +150,11 @@ func runActivity(ctx context.Context, spec Spec) (Info, error) {
 		}
 		return Info{Id: existing.ID}, nil
 	}
+	// The image first — create does not pull.
+	if pull, err := cli.ImagePull(ctx, spec.Config.Image, image.PullOptions{}); err == nil {
+		_, _ = io.Copy(io.Discard, pull)
+		_ = pull.Close()
+	} // a locally built image is fine — pull is best-effort
 	created, err := cli.ContainerCreate(ctx, spec.Config, spec.Host, nil, nil, spec.Name)
 	if err != nil {
 		return Info{}, err
