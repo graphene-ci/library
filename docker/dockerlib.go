@@ -46,6 +46,12 @@ func Install() activity.Call[InstallReport] {
 		if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
 			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
 		}
+		// The chrooted installer cannot start the daemon itself; the
+		// host's systemd is reachable through the machine root.
+		start := machine.Shell(ctx, "systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true")
+		if out, err := obs.RunTail(ctx, start, errTailBytes); err != nil {
+			return InstallReport{}, fmt.Errorf("start docker: %w: %s", err, out)
+		}
 		version, err := dockerVersion(ctx)
 		if err != nil {
 			return InstallReport{}, err
