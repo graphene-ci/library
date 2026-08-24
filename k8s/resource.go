@@ -78,17 +78,20 @@ func WithResourceOption[T any](opts ...pipeline.ResourceOption) Option[T] {
 
 // Resource declares one Kubernetes object as a graphene Resource backed
 // by a temporal-entity: Init = apply + converge, ReconcileEvery = drift
-// heal, Finalize = delete. obj is the user's own typed object (a
-// k8s.io/api type, a provider's CRD type); Ready(ctx) returns the LIVE
-// typed object — real ids live in its Status, put there by the
-// provider, not invented here. For cross-resource wiring prefer the
-// provider's native *Ref fields: the cluster resolves them itself.
-func Resource[T any](ctx pipeline.Context, c *Client, obj *T, opts ...Option[T]) pipeline.Resource[*T] {
+// heal, Finalize = delete. name is the resource's ONE name — the entity
+// id and the object's metadata.name (the library stamps it; hand-set
+// ObjectMeta is not needed and a conflicting name is an error). obj is
+// the user's own typed object (a k8s.io/api type, a provider's CRD
+// type); Ready(ctx) returns the LIVE typed object — real ids live in
+// its Status, put there by the provider, not invented here. For
+// cross-resource wiring prefer the provider's native *Ref fields: the
+// cluster resolves them itself.
+func Resource[T any](ctx pipeline.Context, c *Client, name string, obj *T, opts ...Option[T]) pipeline.Resource[*T] {
 	cfg := conf[T]{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	manifest, kindKey, name, err := c.manifestOf(obj)
+	manifest, kindKey, name, err := c.manifestOf(name, obj)
 	self := ref.OwnerRef(kindKey + "/" + name)
 
 	if ctx.Recording() {
@@ -275,8 +278,8 @@ func makeDeclare(cl client.Client) func(context.Context, declareRequest) (k8sSta
 
 // manifestOf flattens the typed object into a manifest, deriving
 // apiVersion/kind from the client's scheme when TypeMeta is not set by
-// hand.
-func (c *Client) manifestOf(obj any) (manifest map[string]any, kindKey, name string, err error) {
+// hand, and stamping metadata.name from the declared name.
+func (c *Client) manifestOf(declaredName string, obj any) (manifest map[string]any, kindKey, name string, err error) {
 	var m map[string]any
 	switch v := obj.(type) {
 	case *unstructured.Unstructured:
@@ -302,9 +305,15 @@ func (c *Client) manifestOf(obj any) (manifest map[string]any, kindKey, name str
 		}
 		u.SetGroupVersionKind(gvks[0])
 	}
-	name = u.GetName()
+	switch u.GetName() {
+	case "", declaredName:
+		u.SetName(declaredName)
+	default:
+		return nil, "", "", fmt.Errorf("object %T: metadata.name %q conflicts with the declared name %q — declare the name once, in the Resource call", obj, u.GetName(), declaredName)
+	}
+	name = declaredName
 	if name == "" {
-		return nil, "", "", fmt.Errorf("object %T has no metadata.name", obj)
+		return nil, "", "", fmt.Errorf("resource needs a name")
 	}
 	if ns := u.GetNamespace(); ns != "" {
 		name = ns + "." + name
