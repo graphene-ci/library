@@ -165,14 +165,15 @@ func runActivity(ctx context.Context, spec Spec) (Info, error) {
 	return Info{Id: created.ID}, nil
 }
 
-// removeActivity tears one container down; absence is success.
-func removeActivity(ctx context.Context, spec Spec) error {
+// removeActivity tears one container down BY ID (the finalizer sends
+// the created container's id, not the spec); absence is success.
+func removeActivity(ctx context.Context, containerId string) error {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
-	err = cli.ContainerRemove(ctx, spec.Name, container.RemoveOptions{Force: true})
+	err = cli.ContainerRemove(ctx, containerId, container.RemoveOptions{Force: true})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}

@@ -92,6 +92,9 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			return st, err
 		}),
 		entdefine.WithFinalize[containerSpec, containerState](func(ctx workflow.Context, st *containerState) error {
+			if st.Info.Id == "" {
+				return nil // never created — nothing to remove
+			}
 			return workflow.ExecuteActivity(entityActivityCtx(ctx), removeActivityName, st.Info.Id).Get(ctx, nil)
 		}),
 	)
