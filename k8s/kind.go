@@ -138,6 +138,12 @@ func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, er
 	if owner != "" {
 		ownership.Init(ctx, &st.State, owner)
 	}
+	// The DESIRED manifest is the teardown fallback from the first
+	// moment: an init aborted by deletion (or failed after apply) must
+	// still leave the finalizer something to delete. Observed replaces
+	// it on readiness; delete tolerates not-found.
+	st.Kubeconfig = spec.Kubeconfig
+	st.Live = spec.Manifest
 	actx := e.activityCtx(ctx)
 	req := opRequest{Kubeconfig: spec.Kubeconfig, Manifest: spec.Manifest}
 	if err := workflow.ExecuteActivity(actx, applyActivityName, req).Get(ctx, nil); err != nil {
