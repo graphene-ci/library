@@ -116,6 +116,10 @@ func Resource[T any](ctx pipeline.Context, c *Client, name string, obj *T, opts 
 		}
 	}
 	o := pipeline.BuildResourceOptions(ctx, cfg.tree)
+	// Declared children are CLAIMED, not implied: the transfer sets
+	// their owner to this resource so the cascade sees the edge —
+	// without it an agent declared as the vm's child outlived the vm.
+	pipeline.AdoptChildren(ctx, self, o.Children)
 	req := declareRequest{
 		Kind:      kindKey,
 		Name:      name,
