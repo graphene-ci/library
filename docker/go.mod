@@ -5,8 +5,8 @@ go 1.26.5
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/graphene-ci/pipeline v0.0.0-20260821152544-0975f0c2b863
-	github.com/graphene-ci/temporal-entity v0.0.0-20260819144617-bad3197122a5
+	github.com/graphene-ci/pipeline v0.0.0-20260826114507-ee5a2600b6cc
+	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	go.temporal.io/sdk v1.47.0
 )
 
