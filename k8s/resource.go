@@ -96,7 +96,11 @@ func Resource[T any](ctx pipeline.Context, c *Client, name string, obj *T, opts 
 
 	if ctx.Recording() {
 		if err == nil {
-			ctx.RecordKind(kindKey)
+			// A k8s kind's spec is the manifest itself (typed by the
+			// user's own Go type); the dictionary entry still says
+			// which dimensions the kind serves.
+			ctx.RecordKindInfo(kindKey, "a kubernetes object, reconciled by its record",
+				nil, []string{"state", "events", "logs", "metrics", "traces"})
 			ensureKindRecorded(ctx, kindKey, cfg)
 		}
 		ctx.RecordDeclare(self, pipeline.BuildResourceOptions(ctx, cfg.tree))
