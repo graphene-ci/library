@@ -69,6 +69,12 @@ func observeActivity(ctx context.Context, req observeRequest) (observeResult, er
 			obs.Str("container", req.Id))
 		obs.Count(ctx, "docker.container.transition", 1,
 			obs.Str("from", req.PrevStatus), obs.Str("to", res.Status))
+		// A status transition is a MILESTONE of the record, not only a
+		// log line: it goes into the entity's own history (dimension
+		// 2), where it survives every telemetry retention.
+		_ = obs.Event(ctx, "container-"+res.Status, map[string]string{
+			"from": req.PrevStatus, "to": res.Status, "container": req.Id,
+		})
 	}
 
 	// The container's own lines since the previous beat.

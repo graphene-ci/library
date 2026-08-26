@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -184,9 +185,17 @@ var declared struct {
 // recordEntities registers the definitions and the declare activity —
 // once per process, during the recording pass.
 func recordEntities(ctx pipeline.Context) {
-	ctx.RecordKind(string(ContainerKind))
-	ctx.RecordKind(string(VolumeKind))
-	ctx.RecordKind(string(NetworkKind))
+	// Full dictionary entries: the installation's kind records learn
+	// what a declaration looks like and which dimensions each kind
+	// serves — all five: the observation beat and the executor's obs
+	// interceptor emit under the record's own reference.
+	allDims := []string{"state", "events", "logs", "metrics", "traces"}
+	ctx.RecordKindInfo(string(ContainerKind),
+		"a docker container on the agent's machine", reflect.TypeOf(containerSpec{}), allDims)
+	ctx.RecordKindInfo(string(VolumeKind),
+		"a docker volume on the agent's machine", reflect.TypeOf(volumeSpec{}), allDims)
+	ctx.RecordKindInfo(string(NetworkKind),
+		"a docker network on the agent's machine", reflect.TypeOf(networkSpec{}), allDims)
 	ctx.RecordActivity(runActivityName, runActivity)
 	ctx.RecordActivity(observeActivityName, observeActivity)
 	ctx.RecordActivity(removeActivityName, removeActivity)
