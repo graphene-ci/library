@@ -1,6 +1,8 @@
 package k8slib
 
 import (
+	"github.com/graphene-ci/pipeline/pkg/obs"
+
 	"context"
 	"fmt"
 
@@ -50,6 +52,9 @@ func applyActivity(ctx context.Context, req opRequest) error {
 	}
 	_, err = cli.Resource(gvr).Namespace(u.GetNamespace()).Apply(
 		ctx, u.GetName(), u, metav1.ApplyOptions{FieldManager: "graphene", Force: true})
+	if err == nil {
+		obs.Info(ctx, "manifest applied", obs.Str("object", u.GetName()))
+	}
 	return err
 }
 
@@ -61,6 +66,9 @@ func observeActivity(ctx context.Context, req opRequest) (observation, error) {
 	}
 	live, err := cli.Resource(gvr).Namespace(u.GetNamespace()).Get(ctx, u.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
+		// The object's absence is the record's own news, not only the
+		// reconcile loop's private knowledge.
+		obs.Warn(ctx, "object missing from the cluster", obs.Str("object", u.GetName()))
 		return observation{Exists: false}, nil
 	}
 	if err != nil {
@@ -76,6 +84,9 @@ func deleteActivity(ctx context.Context, req opRequest) error {
 		return err
 	}
 	err = cli.Resource(gvr).Namespace(u.GetNamespace()).Delete(ctx, u.GetName(), metav1.DeleteOptions{})
+	if err == nil {
+		obs.Info(ctx, "object deleted", obs.Str("object", u.GetName()))
+	}
 	if errors.IsNotFound(err) {
 		return nil
 	}

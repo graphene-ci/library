@@ -44,6 +44,11 @@ type containerSpec struct {
 
 type containerState struct {
 	Info Info `json:"info"`
+	// Status is what the last observation beat saw; a transition is
+	// logged the moment it is noticed.
+	Status string `json:"status,omitempty"`
+	// ObservedUnixNano is the log window's low edge.
+	ObservedUnixNano int64 `json:"observedUnixNano,omitempty"`
 	ownership.State
 }
 
@@ -96,6 +101,24 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 				return nil // never created — nothing to remove
 			}
 			return workflow.ExecuteActivity(entityActivityCtx(ctx), removeActivityName, st.Info.Id).Get(ctx, nil)
+		}),
+		// The record's own telemetry: each beat ships the container's
+		// log lines, a stats sample, and any status transition — the
+		// executor's obs interceptor stamps it all with THIS record's
+		// reference.
+		entdefine.WithReconcileEvery[containerSpec, containerState](observeEvery, func(ctx workflow.Context, ec *entdefine.Ctx[containerSpec, containerState]) error {
+			st := ec.State()
+			if st.Info.Id == "" {
+				return nil
+			}
+			var res observeResult
+			if err := workflow.ExecuteActivity(entityActivityCtx(ctx), observeActivityName, observeRequest{
+				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status,
+			}).Get(ctx, &res); err != nil {
+				return nil //nolint:nilerr // observation must never kill the record
+			}
+			st.Status, st.ObservedUnixNano = res.Status, res.LastLogUnixNano
+			return nil
 		}),
 	)
 	ownership.Register(def, func(s *containerState) *ownership.State { return &s.State })
@@ -165,6 +188,7 @@ func recordEntities(ctx pipeline.Context) {
 	ctx.RecordKind(string(VolumeKind))
 	ctx.RecordKind(string(NetworkKind))
 	ctx.RecordActivity(runActivityName, runActivity)
+	ctx.RecordActivity(observeActivityName, observeActivity)
 	ctx.RecordActivity(removeActivityName, removeActivity)
 	ctx.RecordActivity(volumeEnsureActivityName, volumeEnsureActivity)
 	ctx.RecordActivity(volumeRemoveActivityName, volumeRemoveActivity)
