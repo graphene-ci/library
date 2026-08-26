@@ -44,26 +44,36 @@ func Install() activity.Call[InstallReport] {
 			}
 			return InstallReport{Version: version}, nil
 		}
-		// get.docker.com geo-blocks some networks; the distro package
-		// is the fallback. Package hooks must not start services inside
-		// the chroot (policy-rc.d 101) — the daemon is brought up
-		// through the host's systemd afterwards.
+		// The DISTRIBUTION decides the package manager — read from the
+		// machine's own /etc/os-release, never guessed. get.docker.com
+		// goes first (it speaks most deb/rpm families and geo-blocks
+		// are the reason for the fallback); the case below covers what
+		// it does not: ALT, Arch, Alpine, SUSE. Package hooks must not
+		// start services inside the chroot (policy-rc.d 101) — the
+		// daemon is brought up through the host's systemd afterwards.
 		script := machine.Shell(ctx,
 			"printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; "+
 				"trap 'rm -f /usr/sbin/policy-rc.d' EXIT; "+
 				"export DEBIAN_FRONTEND=noninteractive; "+
-				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null; then "+
-				"sh /tmp/get-docker.sh; "+
-				"elif command -v apt-get >/dev/null 2>&1; then "+
-				"apt-get update -qq && apt-get install -y -qq docker.io; "+
-				"elif command -v dnf >/dev/null 2>&1; then dnf install -y -q moby-engine; "+
-				"else echo 'no way to install docker' >&2; exit 1; fi")
+				". /etc/os-release 2>/dev/null || ID=unknown; "+
+				"family=\"$ID $ID_LIKE\"; "+
+				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null && sh /tmp/get-docker.sh; then :; else "+
+				"case \"$family\" in "+
+				"*altlinux*) apt-get update -qq && apt-get install -y -qq docker-engine ;; "+
+				"*debian*|*ubuntu*) apt-get update -qq && apt-get install -y -qq docker.io ;; "+
+				"*fedora*) dnf install -y -q moby-engine ;; "+
+				"*rhel*|*centos*) (command -v dnf >/dev/null && dnf install -y -q docker) || yum install -y -q docker ;; "+
+				"*suse*) zypper --non-interactive install docker ;; "+
+				"*arch*) pacman -Sy --noconfirm docker ;; "+
+				"*alpine*) apk add --no-cache docker ;; "+
+				"*) echo \"no docker recipe for distribution: $family\" >&2; exit 1 ;; "+
+				"esac; fi")
 		if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
 			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
 		}
 		// The chrooted installer cannot start the daemon itself; the
 		// host's systemd is reachable through the machine root.
-		start := machine.Shell(ctx, "systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true")
+		start := machine.Shell(ctx, "systemctl enable --now docker 2>/dev/null || rc-update add docker boot 2>/dev/null && rc-service docker start 2>/dev/null || service docker start 2>/dev/null || true")
 		if out, err := obs.RunTail(ctx, start, errTailBytes); err != nil {
 			return InstallReport{}, fmt.Errorf("start docker: %w: %s", err, out)
 		}
