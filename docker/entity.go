@@ -41,6 +41,9 @@ type containerSpec struct {
 	Config *container.Config     `json:"config"`
 	Host   *container.HostConfig `json:"host,omitempty"`
 	Owner  ref.OwnerRef          `json:"owner,omitempty"`
+	// Flows are the declared outgoing edges of this container (Р-Н25) —
+	// carried into the record's state for the topology view.
+	Flows []ownership.Flow `json:"flows,omitempty"`
 }
 
 type containerState struct {
@@ -93,6 +96,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
+			st.State.Flows = spec.Flows
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
 				Spec{Name: spec.Name, Config: spec.Config, Host: spec.Host}).Get(ctx, &st.Info)
 			return st, err
