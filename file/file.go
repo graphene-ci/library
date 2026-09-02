@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/graphene-ci/temporal-entity/pkg/entclient"
@@ -168,7 +169,16 @@ const declareActivityName = "file.declare"
 
 var declared *entdefine.Definition[fileSpec, fileState]
 
+// recordOnce guards recordEntities: File is called on every file, but
+// the definition, activities and worker hook register exactly ONCE — a
+// second RecordWorker hook re-registers the "file" workflow and panics.
+var recordOnce sync.Once
+
 func recordEntities(ctx pipeline.Context) {
+	recordOnce.Do(func() { recordEntitiesOnce(ctx) })
+}
+
+func recordEntitiesOnce(ctx pipeline.Context) {
 	allDims := []string{"state", "events", "logs", "metrics", "traces"}
 	ctx.RecordKindInfo(string(FileKind),
 		"a file on the agent's machine, written and removed with the record", reflect.TypeOf(fileSpec{}), allDims)

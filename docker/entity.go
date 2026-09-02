@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -193,9 +194,21 @@ var declared struct {
 	network   *entdefine.Definition[networkSpec, networkState]
 }
 
+// recordOnce guards recordEntities: the constructor calls it on EVERY
+// container/volume/network declared, but the definitions, activities and
+// the worker hook must register exactly ONCE — a second RecordWorker
+// hook re-registers the "docker" workflow and panics ("already
+// registered"). The recording pass is one per process, so a process-wide
+// Once is the right scope.
+var recordOnce sync.Once
+
 // recordEntities registers the definitions and the declare activity —
 // once per process, during the recording pass.
 func recordEntities(ctx pipeline.Context) {
+	recordOnce.Do(func() { recordEntitiesOnce(ctx) })
+}
+
+func recordEntitiesOnce(ctx pipeline.Context) {
 	// Full dictionary entries: the installation's kind records learn
 	// what a declaration looks like and which dimensions each kind
 	// serves — all five: the observation beat and the executor's obs
