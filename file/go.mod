@@ -3,7 +3,7 @@ module github.com/graphene-ci/library/file
 go 1.26.5
 
 require (
-	github.com/graphene-ci/pipeline v0.0.0-20260902115339-8a5daaff0ee5
+	github.com/graphene-ci/pipeline v0.0.0-20260902121639-5393e0e4342e
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	go.temporal.io/sdk v1.47.0
 )

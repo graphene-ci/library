@@ -57,6 +57,8 @@ github.com/gopherex/schemapb/go v0.0.0-20260805100557-b08e53066d63 h1:6fdZlUSqU9
 github.com/gopherex/schemapb/go v0.0.0-20260805100557-b08e53066d63/go.mod h1:g9W8TC7ZZyPXKp+eQuPv612T2d0ZGs/Y+AIR2RA8KYw=
 github.com/graphene-ci/pipeline v0.0.0-20260902111342-a8260ee8adcd h1:rF4x4bRwroIm4fv0QlRLmNJujjjJQUS1qQlkhl3yQPQ=
 github.com/graphene-ci/pipeline v0.0.0-20260902111342-a8260ee8adcd/go.mod h1:PA9xbu1/i8lvr5ufKIr3S5FL82j/B9fASUPzl2b9lbc=
+github.com/graphene-ci/pipeline v0.0.0-20260902121639-5393e0e4342e h1:ZWylkRfJdsjafAULUFYUCD0+uauHI4XLPsXkBIbdxM8=
+github.com/graphene-ci/pipeline v0.0.0-20260902121639-5393e0e4342e/go.mod h1:PA9xbu1/i8lvr5ufKIr3S5FL82j/B9fASUPzl2b9lbc=
 github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb h1:P8lPqznDjPIz4hghg8aVb/9tMrfVJxb6nJhcFWneCII=
 github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb/go.mod h1:/dueP9d/i14iEJHNIjQVOYvbiRHZVXMmWUQYIYnBUd8=
 github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 h1:B+8ClL/kCQkRiU82d9xajRPKYMrB7E0MbtzWVi1K4ns=
