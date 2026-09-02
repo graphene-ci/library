@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/graphene-ci/pipeline v0.0.0-20260902111342-a8260ee8adcd
+	github.com/graphene-ci/pipeline v0.0.0-20260902121639-5393e0e4342e
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.71.0
