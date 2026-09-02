@@ -42,11 +42,3 @@ func TestWriteAndRemove(t *testing.T) {
 	}
 }
 
-func TestWriteRejectsUnwiredSources(t *testing.T) {
-	if _, err := writeActivity(context.Background(), fileSpec{Path: "/tmp/x", Secret: "s"}); err == nil {
-		t.Fatal("secret source must error until wired")
-	}
-	if _, err := writeActivity(context.Background(), fileSpec{Path: "/tmp/x", Artifact: "a"}); err == nil {
-		t.Fatal("artifact source must error until wired")
-	}
-}

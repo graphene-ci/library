@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,6 +34,7 @@ import (
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 	"github.com/graphene-ci/pipeline/pkg/wire"
+	"github.com/graphene-ci/pipeline/pkg/workerapi"
 )
 
 // FileKind is the machine-file resource.
@@ -49,12 +51,15 @@ type fileSpec struct {
 	// Content is inline bytes (FromBytes/FromEmbed). Small configs only;
 	// a secret's value never travels here.
 	Content []byte `json:"content,omitempty"`
-	// Secret/Artifact name a content source resolved on the machine.
-	Secret   string          `json:"secret,omitempty"`
-	Artifact string          `json:"artifact,omitempty"`
-	Mode     uint32          `json:"mode,omitempty"`
-	Owner    ref.OwnerRef    `json:"owner,omitempty"`
-	Flows    []ownership.Flow `json:"flows,omitempty"`
+	// Secret is the NAME of a secret; the agent resolves the value on the
+	// machine (worker plane), so it never sits in the spec.
+	Secret string `json:"secret,omitempty"`
+	// ArtifactLocation is the resolved blob location of an artifact
+	// source (name → location done client-side); the agent streams it.
+	ArtifactLocation string           `json:"artifactLocation,omitempty"`
+	Mode             uint32           `json:"mode,omitempty"`
+	Owner            ref.OwnerRef     `json:"owner,omitempty"`
+	Flows            []ownership.Flow `json:"flows,omitempty"`
 }
 
 type fileState struct {
@@ -100,13 +105,13 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 }
 
 // writeActivity materializes the file on the machine. Runs inside the
-// per-(agent × run) container, so the path is the machine's own.
+// per-(agent × run) container, so the path is the machine's own. The
+// content is resolved HERE: a secret's value is fetched on the machine
+// (never in the spec), an artifact's bytes streamed from the store.
 func writeActivity(ctx context.Context, spec fileSpec) (Info, error) {
-	switch {
-	case spec.Secret != "":
-		return Info{}, fmt.Errorf("file %q: secret source resolves on the machine — not wired yet", spec.Path)
-	case spec.Artifact != "":
-		return Info{}, fmt.Errorf("file %q: artifact source not wired yet", spec.Path)
+	content, err := resolveContent(ctx, spec)
+	if err != nil {
+		return Info{}, fmt.Errorf("file %q: %w", spec.Path, err)
 	}
 	host := machine.Path(spec.Path)
 	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil { //nolint:gosec // config dirs are world-readable
@@ -116,10 +121,31 @@ func writeActivity(ctx context.Context, spec fileSpec) (Info, error) {
 	if mode == 0 {
 		mode = 0o644
 	}
-	if err := os.WriteFile(host, spec.Content, mode); err != nil {
+	if err := os.WriteFile(host, content, mode); err != nil {
 		return Info{}, fmt.Errorf("write %s: %w", spec.Path, err)
 	}
 	return Info{Path: spec.Path}, nil
+}
+
+// resolveContent turns the spec's source into bytes at the point of use.
+func resolveContent(ctx context.Context, spec fileSpec) ([]byte, error) {
+	switch {
+	case spec.Secret != "":
+		v, err := workerapi.GetSecret(ctx, spec.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("resolve secret %q: %w", spec.Secret, err)
+		}
+		return []byte(v), nil
+	case spec.ArtifactLocation != "":
+		rc, err := workerapi.GetBlob(ctx, spec.ArtifactLocation)
+		if err != nil {
+			return nil, fmt.Errorf("fetch artifact blob: %w", err)
+		}
+		defer func() { _ = rc.Close() }()
+		return io.ReadAll(rc)
+	default:
+		return spec.Content, nil
+	}
 }
 
 // removeActivity deletes the file; absence is success (retry-safe).
@@ -223,7 +249,14 @@ func File(ctx pipeline.Context, agent pipeline.Agent, path string, src file.Sour
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
-	spec := fileSpec{Path: path, Content: src.Bytes, Secret: src.Secret, Artifact: src.Artifact, Owner: o.Parent, Flows: o.Flows}
+	spec := fileSpec{Path: path, Content: src.Bytes, Secret: src.Secret, Owner: o.Parent, Flows: o.Flows}
+	// An artifact source resolves NAME → blob location here (the record
+	// exists already); the agent streams the location. Ready blocks until
+	// the artifact is verified — a file from a missing artifact fails
+	// loudly rather than writing nothing.
+	if src.Artifact != "" {
+		spec.ArtifactLocation = pipeline.AttachArtifact(ctx, src.Artifact).Ready(ctx).Blob.Location
+	}
 	raw, _ := json.Marshal(spec)
 	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dispatchOpts(), declareActivityName, declareRequest{
 		Name: fileId(agent, path), Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
