@@ -44,6 +44,10 @@ type containerSpec struct {
 	// Flows are the declared outgoing edges of this container (Р-Н25) —
 	// carried into the record's state for the topology view.
 	Flows []ownership.Flow `json:"flows,omitempty"`
+	// Scrape is a prometheus metrics endpoint the container exposes; the
+	// observation beat pulls it and ships the samples as the container's
+	// own metrics (Р-Н27). Empty disables scraping.
+	Scrape string `json:"scrape,omitempty"`
 }
 
 type containerState struct {
@@ -53,6 +57,8 @@ type containerState struct {
 	Status string `json:"status,omitempty"`
 	// ObservedUnixNano is the log window's low edge.
 	ObservedUnixNano int64 `json:"observedUnixNano,omitempty"`
+	// Scrape mirrors the spec's metrics endpoint for the beat.
+	Scrape string `json:"scrape,omitempty"`
 	ownership.State
 }
 
@@ -97,6 +103,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
 			st.State.Flows = spec.Flows
+			st.Scrape = spec.Scrape
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
 				Spec{Name: spec.Name, Config: spec.Config, Host: spec.Host}).Get(ctx, &st.Info)
 			return st, err
@@ -118,7 +125,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			}
 			var res observeResult
 			if err := workflow.ExecuteActivity(entityActivityCtx(ctx), observeActivityName, observeRequest{
-				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status,
+				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status, Scrape: st.Scrape,
 			}).Get(ctx, &res); err != nil {
 				return nil //nolint:nilerr // observation must never kill the record
 			}
