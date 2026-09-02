@@ -105,6 +105,10 @@ type Spec struct {
 	Name   string                `json:"name"`
 	Config *container.Config     `json:"config"`
 	Host   *container.HostConfig `json:"host,omitempty"`
+	// Scrape is a prometheus metrics endpoint the container exposes
+	// (e.g. "http://localhost:9187/metrics"); the observation beat pulls
+	// it and ships the samples as this container's own metrics (Р-Н27).
+	Scrape string `json:"scrape,omitempty"`
 }
 
 // Info is the output of a running container resource.
@@ -136,7 +140,7 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
-	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent, Flows: o.Flows})
+	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent, Flows: o.Flows, Scrape: spec.Scrape})
 	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
 		Kind: ContainerKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
 	})
