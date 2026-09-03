@@ -6,8 +6,8 @@
 //
 // Content sources come from package file (pipeline/pkg/file): FromBytes,
 // FromEmbed (the user ships config via //go:embed). Secret/Artifact
-// sources are declared but resolved on the machine — not yet materialized
-// here (a clear error until wired), so a value never sits in the spec.
+// sources resolve on the machine through the worker plane, so a secret value
+// never sits in the resource spec or workflow history.
 package file
 
 import (
