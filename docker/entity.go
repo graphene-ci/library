@@ -127,6 +127,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			var res observeResult
 			if err := workflow.ExecuteActivity(entityActivityCtx(ctx), observeActivityName, observeRequest{
 				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status, Scrape: st.Scrape,
+				Entity: workflow.GetInfo(ctx).WorkflowExecution.ID,
 			}).Get(ctx, &res); err != nil {
 				return nil //nolint:nilerr // observation must never kill the record
 			}
