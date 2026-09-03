@@ -44,6 +44,11 @@ type observeRequest struct {
 	PrevStatus string `json:"prevStatus,omitempty"`
 	// Scrape is the container's prometheus endpoint, pulled each beat.
 	Scrape string `json:"scrape,omitempty"`
+	// Entity is this record's reference ("docker/<name>"); the beat stamps
+	// every sample, log and scraped metric with it, so `metrics docker
+	// <name>` (and logs/events) find them under the record — not only
+	// under the run/agent the executor happens to carry.
+	Entity string `json:"entity,omitempty"`
 }
 
 // observeResult is what the beat saw.
@@ -55,6 +60,12 @@ type observeResult struct {
 
 // observeActivity ships one beat of the container's own telemetry.
 func observeActivity(ctx context.Context, req observeRequest) (observeResult, error) {
+	// Attribute this whole beat to the container's record, so its logs,
+	// stats and scraped app-metrics land under docker/<name> — the
+	// interceptor only carries the run/agent the executor runs as.
+	if req.Entity != "" {
+		ctx = obs.WithEntity(ctx, req.Entity)
+	}
 	res := observeResult{LastLogUnixNano: req.SinceUnixNano}
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
