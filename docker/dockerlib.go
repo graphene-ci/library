@@ -179,18 +179,20 @@ func runActivity(ctx context.Context, spec Spec) (Info, error) {
 	return Info{Id: created.ID}, nil
 }
 
-// removeActivity tears one container down BY ID (the finalizer sends the
-// created container's id, not the spec); absence is success. A transient
-// daemon blip returns a connection error and is RETRIED (the finalize
-// bounds those retries so a permanently-gone daemon does not wedge) —
-// never silently swallowed, or a container survives a daemon restart.
-func removeActivity(ctx context.Context, containerId string) error {
+// removeActivity tears one container down by name or id (docker accepts
+// either; the finalizer sends the container's NAME so a container an
+// interrupted init created but never reported an id for is still reaped);
+// absence is success. A transient daemon blip returns a connection error
+// and is RETRIED (the finalize bounds those retries so a permanently-gone
+// daemon does not wedge) — never silently swallowed, or a container
+// survives a daemon restart.
+func removeActivity(ctx context.Context, containerRef string) error {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
-	err = cli.ContainerRemove(ctx, containerId, container.RemoveOptions{Force: true})
+	err = cli.ContainerRemove(ctx, containerRef, container.RemoveOptions{Force: true})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}

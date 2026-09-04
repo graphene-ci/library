@@ -53,6 +53,15 @@ type containerSpec struct {
 
 type containerState struct {
 	Info Info `json:"info"`
+	// Name is the container's name on the machine, recorded at init
+	// BEFORE the create runs — so finalize can remove even a container an
+	// interrupted init created (by name) but never reported an Id for.
+	// runActivity names the container by spec.Name; docker removes by name
+	// or id alike, so removing by name covers both the ready record and
+	// the mid-create leak. There is no reaper for library containers on a
+	// user's machine (only for managed run containers on the server), so a
+	// missed remove on a persistent machine leaks forever.
+	Name string `json:"name,omitempty"`
 	// Status is what the last observation beat saw; a transition is
 	// logged the moment it is noticed.
 	Status string `json:"status,omitempty"`
@@ -70,6 +79,10 @@ type volumeSpec struct {
 
 type volumeState struct {
 	Info VolumeInfo `json:"info"`
+	// Name is the volume name recorded at init before the ensure runs, so
+	// finalize removes even a volume an interrupted init created but never
+	// reported. See containerState.Name.
+	Name string `json:"name,omitempty"`
 	ownership.State
 }
 
@@ -80,6 +93,10 @@ type networkSpec struct {
 
 type networkState struct {
 	Info NetworkInfo `json:"info"`
+	// Name is the network name recorded at init before the ensure runs, so
+	// finalize removes even a network an interrupted init created but never
+	// reported. See containerState.Name.
+	Name string `json:"name,omitempty"`
 	ownership.State
 }
 
@@ -95,11 +112,12 @@ func entityActivityCtx(ctx workflow.Context) workflow.Context {
 	})
 }
 
-// removeContainerCtx bounds the teardown remove: retries ride out a
+// boundedRemoveCtx bounds a teardown remove: retries ride out a
 // transient daemon blip, but ScheduleToCloseTimeout caps the total so a
 // permanently-unreachable daemon (the machine going away) cannot wedge the
-// cascade — the finalize then gives up and lets the record go.
-func removeContainerCtx(ctx workflow.Context) workflow.Context {
+// cascade — the finalize then gives up and lets the record go. Shared by
+// container, volume and network finalize.
+func boundedRemoveCtx(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout:    time.Minute,
 		ScheduleToCloseTimeout: 2 * time.Minute,
@@ -121,25 +139,34 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			}
 			st.State.Flows = spec.Flows
 			st.Scrape = spec.Scrape
+			st.Name = spec.Name // recorded BEFORE create, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
 				Spec{Name: spec.Name, Config: spec.Config, Host: spec.Host}).Get(ctx, &st.Info)
 			return st, err
 		}),
 		entdefine.WithFinalize[containerSpec, containerState](func(ctx workflow.Context, st *containerState) error {
-			if st.Info.Id == "" {
-				return nil // never created — nothing to remove
+			// Remove by NAME, not id: a cancel that cut init mid-create left
+			// no Id in state, yet runActivity may already have created the
+			// container by name — removing by name reaps that leak too (there
+			// is no reaper for library containers on a user's machine). An id
+			// is a valid remove target as well, so name covers the ready case.
+			target := st.Name
+			if target == "" {
+				target = st.Info.Id
 			}
-			// Removing the container is BOUNDED and BEST-EFFORT. A transient
-			// daemon blip is retried (removeContainerCtx caps the retries so
-			// it cannot wedge the whole run's teardown forever), but if the
-			// daemon stays unreachable — the machine is being torn down under
-			// us, the container dies with it — we log and let the record go.
-			// A permanent wedge on one container would strand the entire
-			// cascade; a rare leak on a surviving machine is the lesser evil
-			// and the reaper collects it.
-			if err := workflow.ExecuteActivity(removeContainerCtx(ctx), removeActivityName, st.Info.Id).Get(ctx, nil); err != nil {
+			if target == "" {
+				return nil // no name and no id — nothing was ever created
+			}
+			// BOUNDED and BEST-EFFORT. A transient daemon blip is retried
+			// (boundedRemoveCtx caps the retries so it cannot wedge the whole
+			// run's teardown forever), but if the daemon stays unreachable —
+			// the machine is being torn down under us, the container dies with
+			// it — we log and let the record go. A permanent wedge on one
+			// container would strand the entire cascade; a rare leak on a
+			// surviving machine is the lesser evil.
+			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), removeActivityName, target).Get(ctx, nil); err != nil {
 				workflow.GetLogger(ctx).Warn("container remove gave up; letting the record go",
-					"container", st.Info.Id, "error", err)
+					"container", target, "error", err)
 			}
 			return nil
 		}),
@@ -175,11 +202,24 @@ func volumeDef() *entdefine.Definition[volumeSpec, volumeState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
+			st.Name = spec.Options.Name // recorded BEFORE ensure, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), volumeEnsureActivityName, spec.Options).Get(ctx, &st.Info)
 			return st, err
 		}),
 		entdefine.WithFinalize[volumeSpec, volumeState](func(ctx workflow.Context, st *volumeState) error {
-			return workflow.ExecuteActivity(entityActivityCtx(ctx), volumeRemoveActivityName, st.Info.Name).Get(ctx, nil)
+			target := st.Name
+			if target == "" {
+				target = st.Info.Name
+			}
+			if target == "" {
+				return nil
+			}
+			// BOUNDED and BEST-EFFORT — same reasoning as the container finalize.
+			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), volumeRemoveActivityName, target).Get(ctx, nil); err != nil {
+				workflow.GetLogger(ctx).Warn("volume remove gave up; letting the record go",
+					"volume", target, "error", err)
+			}
+			return nil
 		}),
 	)
 	ownership.Register(def, func(s *volumeState) *ownership.State { return &s.State })
@@ -194,11 +234,24 @@ func networkDef() *entdefine.Definition[networkSpec, networkState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
+			st.Name = spec.Spec.Name // recorded BEFORE ensure, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), networkEnsureActivityName, spec.Spec).Get(ctx, &st.Info)
 			return st, err
 		}),
 		entdefine.WithFinalize[networkSpec, networkState](func(ctx workflow.Context, st *networkState) error {
-			return workflow.ExecuteActivity(entityActivityCtx(ctx), networkRemoveActivityName, st.Info.Name).Get(ctx, nil)
+			target := st.Name
+			if target == "" {
+				target = st.Info.Name
+			}
+			if target == "" {
+				return nil
+			}
+			// BOUNDED and BEST-EFFORT — same reasoning as the container finalize.
+			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), networkRemoveActivityName, target).Get(ctx, nil); err != nil {
+				workflow.GetLogger(ctx).Warn("network remove gave up; letting the record go",
+					"network", target, "error", err)
+			}
+			return nil
 		}),
 	)
 	ownership.Register(def, func(s *networkState) *ownership.State { return &s.State })
