@@ -95,6 +95,22 @@ func entityActivityCtx(ctx workflow.Context) workflow.Context {
 	})
 }
 
+// removeContainerCtx bounds the teardown remove: retries ride out a
+// transient daemon blip, but ScheduleToCloseTimeout caps the total so a
+// permanently-unreachable daemon (the machine going away) cannot wedge the
+// cascade — the finalize then gives up and lets the record go.
+func removeContainerCtx(ctx workflow.Context) workflow.Context {
+	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout:    time.Minute,
+		ScheduleToCloseTimeout: 2 * time.Minute,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    15 * time.Second,
+		},
+	})
+}
+
 func containerDef() *entdefine.Definition[containerSpec, containerState] {
 	def := entdefine.New[containerSpec, containerState](ContainerKind,
 		entdefine.WithSearchAttributes[containerSpec, containerState](true),
@@ -113,7 +129,19 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			if st.Info.Id == "" {
 				return nil // never created — nothing to remove
 			}
-			return workflow.ExecuteActivity(entityActivityCtx(ctx), removeActivityName, st.Info.Id).Get(ctx, nil)
+			// Removing the container is BOUNDED and BEST-EFFORT. A transient
+			// daemon blip is retried (removeContainerCtx caps the retries so
+			// it cannot wedge the whole run's teardown forever), but if the
+			// daemon stays unreachable — the machine is being torn down under
+			// us, the container dies with it — we log and let the record go.
+			// A permanent wedge on one container would strand the entire
+			// cascade; a rare leak on a surviving machine is the lesser evil
+			// and the reaper collects it.
+			if err := workflow.ExecuteActivity(removeContainerCtx(ctx), removeActivityName, st.Info.Id).Get(ctx, nil); err != nil {
+				workflow.GetLogger(ctx).Warn("container remove gave up; letting the record go",
+					"container", st.Info.Id, "error", err)
+			}
+			return nil
 		}),
 		// The record's own telemetry: each beat ships the container's
 		// log lines, a stats sample, and any status transition — the

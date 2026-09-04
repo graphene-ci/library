@@ -180,23 +180,18 @@ func runActivity(ctx context.Context, spec Spec) (Info, error) {
 }
 
 // removeActivity tears one container down BY ID (the finalizer sends the
-// created container's id, not the spec). Absence is success — and so is an
-// UNREACHABLE daemon: this only runs on teardown, and a machine whose
-// docker is gone (the run's vm being deleted under it, docker never
-// installed before a cancel) has no container to remove. Without this the
-// remove retries forever on "cannot connect to the docker daemon" and
-// wedges the whole teardown behind a container that cannot exist.
+// created container's id, not the spec); absence is success. A transient
+// daemon blip returns a connection error and is RETRIED (the finalize
+// bounds those retries so a permanently-gone daemon does not wedge) —
+// never silently swallowed, or a container survives a daemon restart.
 func removeActivity(ctx context.Context, containerId string) error {
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err != nil {
-		if dockerclient.IsErrConnectionFailed(err) {
-			return nil
-		}
 		return err
 	}
 	defer func() { _ = cli.Close() }()
 	err = cli.ContainerRemove(ctx, containerId, container.RemoveOptions{Force: true})
-	if err != nil && !cerrdefs.IsNotFound(err) && !dockerclient.IsErrConnectionFailed(err) {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	return nil
