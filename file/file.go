@@ -26,6 +26,7 @@ import (
 	entity "github.com/graphene-ci/temporal-entity/pkg/entity"
 	temporalactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -80,6 +81,21 @@ func entityActivityCtx(ctx workflow.Context) workflow.Context {
 	})
 }
 
+// boundedRemoveCtx bounds the teardown remove so a gone machine cannot
+// wedge the cascade: retries ride out a transient blip, ScheduleToClose
+// caps the total, then finalize gives up and lets the record go.
+func boundedRemoveCtx(ctx workflow.Context) workflow.Context {
+	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout:    time.Minute,
+		ScheduleToCloseTimeout: 2 * time.Minute,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    15 * time.Second,
+		},
+	})
+}
+
 func fileDef() *entdefine.Definition[fileSpec, fileState] {
 	def := entdefine.New[fileSpec, fileState](FileKind,
 		entdefine.WithSearchAttributes[fileSpec, fileState](true),
@@ -89,6 +105,10 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
 			st.State.Flows = spec.Flows
+			// Record the path BEFORE the write runs, so a cancel that cuts
+			// writeActivity mid-write (the file may already be on disk) still
+			// finalizes and removes it — a persistent machine has no reaper.
+			st.Info.Path = spec.Path
 			if err := workflow.ExecuteActivity(entityActivityCtx(ctx), writeActivityName, spec).Get(ctx, &st.Info); err != nil {
 				return st, err
 			}
@@ -98,7 +118,14 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 			if st.Info.Path == "" {
 				return nil
 			}
-			return workflow.ExecuteActivity(entityActivityCtx(ctx), removeActivityName, st.Info.Path).Get(ctx, nil)
+			// BOUNDED and BEST-EFFORT: retries ride out a transient blip but
+			// ScheduleToCloseTimeout caps the total so a gone machine cannot
+			// wedge the cascade; a rare leftover file is the lesser evil.
+			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), removeActivityName, st.Info.Path).Get(ctx, nil); err != nil {
+				workflow.GetLogger(ctx).Warn("file remove gave up; letting the record go",
+					"path", st.Info.Path, "error", err)
+			}
+			return nil
 		}),
 	)
 	ownership.Register(def, func(s *fileState) *ownership.State { return &s.State })
