@@ -40,6 +40,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: ${{ matrix.module }}/go.mod
+      - name: git identity
+        # some modules (git) run real git commits/tags in their tests
+        run: |
+          git config --global user.email ci@graphene-ci.dev
+          git config --global user.name "graphene CI"
       - name: build, vet, test
         working-directory: ${{ matrix.module }}
         run: |
