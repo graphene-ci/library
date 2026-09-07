@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # This repo holds several independent Go modules; discover them so a new
+  # module is covered without touching this file.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.find.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: find
+        run: |
+          set -euo pipefail
+          mods=$(find . -name go.mod -not -path '*/vendor/*' -printf '%h\n' | sort | jq -R . | jq -sc .)
+          echo "modules=$mods" >> "$GITHUB_OUTPUT"
+          echo "modules: $mods"
+
+  test:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.discover.outputs.modules) }}
+    name: test (${{ matrix.module }})
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      - name: build, vet, test
+        working-directory: ${{ matrix.module }}
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
