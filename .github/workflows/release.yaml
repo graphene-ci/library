@@ -1,0 +1,25 @@
+name: release
+
+# A Go module's release IS its tag (the module proxy serves it); this just
+# creates the matching GitHub Release page with auto-generated notes so the
+# versions are visible and documented. No build artifacts — consumers use
+# `go get <module>@<tag>`.
+on:
+  push:
+    tags:
+      - "**"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Create the GitHub Release for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag
