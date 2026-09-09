@@ -22,15 +22,31 @@ Each directory is a separate Go module, versioned with a module-prefixed tag
 (`docker/vX.Y.Z`, `k8s/vX.Y.Z`, …). Add the ones you use:
 
 ```bash
-go get github.com/graphene-ci/library/docker@latest   # or @docker/v0.1.0
-go get github.com/graphene-ci/library/k8s@latest
-go get github.com/graphene-ci/library/git@latest
-go get github.com/graphene-ci/library/file@latest
+go get github.com/graphene-ci/library/docker@v0.2.0
+go get github.com/graphene-ci/library/k8s@v0.2.0
+go get github.com/graphene-ci/library/git@v0.1.0
+go get github.com/graphene-ci/library/file@v0.1.1
 ```
 
-## Test
+## Проверка
 
-Per module:
+Для изменений совместно с ещё не опубликованным SDK нужен соседний checkout
+`../pipeline`. Подготовка создаёт игнорируемый `go.work`; инструменты прибитых
+версий устанавливаются только в `bin/`.
+
+```bash
+make configure
+make test
+make lint
+```
+
+`docker/dockertest` и `k8s/k8stest` — адаптеры локальной модели пайплайна.
+Их wire-типы общие с production-библиотеками, регистрация изолирована между
+подготовками. Дополнительно тесты исполняют настоящие entity workflows с
+подменой внешних Docker/Kubernetes операций. Пользовательское руководство:
+[локальные тесты](https://graphene-ci.github.io/docs/sdk/testing).
+
+Проверка отдельного модуля после подготовки:
 
 ```bash
 go -C docker test ./...

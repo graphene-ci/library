@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	sourcefile "github.com/graphene-ci/pipeline/pkg/file"
+	"github.com/graphene-ci/pipeline/pkg/pipeline"
 )
 
 func TestWriteAndRemove(t *testing.T) {
@@ -42,3 +45,21 @@ func TestWriteAndRemove(t *testing.T) {
 	}
 }
 
+func TestIndependentPreparationsRegisterFileActivities(t *testing.T) {
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := pipeline.Prepare("files", func(ctx pipeline.Context, _ struct{}) (string, error) {
+				a := pipeline.NewAgent(ctx, "agent")
+				File(ctx, a, "/config", sourcefile.FromBytes([]byte("config")))
+				return "", nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Activities()[writeActivityName] == nil {
+				t.Fatal("file activity missing from this preparation")
+			}
+		})
+	}
+}

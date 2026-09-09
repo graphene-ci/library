@@ -1,0 +1,38 @@
+version: "2"
+run:
+  go: "1.25"
+output:
+  formats:
+    text:
+      path: stdout
+linters:
+  exclusions:
+    rules:
+      # The source carries only SecretRef (a secret name), never secret bytes.
+      - path: file/file\.go
+        linters: [gosec]
+        text: 'G117: Marshaled struct field "Secret"'
+      # These tests read/write their own t.TempDir fixtures and invoke git with
+      # arguments constructed in the test; no external paths or commands enter.
+      - path: (file/file_test|git/gitlib_test)\.go
+        linters: [gosec]
+        text: 'G(204|304):'
+  default: standard
+  enable:
+    - errorlint
+    - exhaustive
+    - gocritic
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
+    - staticcheck
+  settings:
+    revive:
+      rules:
+        # Repository convention: identifier suffix is "Id" (matches the
+        # protobuf id-message convention), not Go's default "ID".
+        - name: var-naming
+          arguments:
+            - ["ID"]
+            - []

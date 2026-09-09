@@ -177,6 +177,8 @@ func sampleValue(t dto.MetricType, m *dto.Metric) (float64, bool) {
 		return m.GetCounter().GetValue(), true
 	case dto.MetricType_UNTYPED:
 		return m.GetUntyped().GetValue(), true
+	case dto.MetricType_SUMMARY, dto.MetricType_HISTOGRAM, dto.MetricType_GAUGE_HISTOGRAM:
+		return 0, false
 	default:
 		return 0, false
 	}

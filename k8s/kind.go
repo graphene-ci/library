@@ -2,7 +2,6 @@ package k8slib
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/graphene-ci/temporal-entity/pkg/entdefine"
@@ -11,9 +10,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/graphene-ci/library/k8s/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
-	"github.com/graphene-ci/pipeline/pkg/pipeline"
-	"github.com/graphene-ci/pipeline/pkg/ref"
 )
 
 // Every Kubernetes resource is a temporal-entity: Init = server-side
@@ -24,26 +22,8 @@ import (
 // which decode the live object before calling user knowledge.
 
 // k8sSpec is the entity spec: the desired manifest and which cluster.
-type k8sSpec struct {
-	Manifest   map[string]any     `json:"manifest"`
-	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
-	// Owner is the initial owner in the tree (the run by default).
-	Owner ref.OwnerRef `json:"owner,omitempty"`
-}
-
-// k8sState is the entity state: the live object and the heal history.
-// Kubeconfig is the teardown copy — the finalizer only sees State in the
-// current chassis (its documented limitation), so what teardown needs
-// lives here. TODO(chassis): let Finalize see Spec and drop it.
-type k8sState struct {
-	Live       map[string]any     `json:"live,omitempty"`
-	Heals      int                `json:"heals,omitempty"`
-	Drifted    bool               `json:"drifted,omitempty"`
-	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
-	// Owned is the tree half: current owner, transfer command, the
-	// EntityOwner/KeepUntil mirrors.
-	ownership.State
-}
+type k8sSpec = contract.Spec
+type k8sState = contract.State
 
 // kindConfig is the per-kind knowledge, wrapped untyped.
 type kindConfig struct {
@@ -78,23 +58,8 @@ type kindEntry struct {
 	def *entdefine.Definition[k8sSpec, k8sState]
 }
 
-// kinds is the process-wide kind registry, filled during the recording
-// pass (write-once before workers start) and read by the declare
-// activity.
-var kinds = struct {
-	sync.Mutex
-	m map[string]*kindEntry
-}{m: map[string]*kindEntry{}}
-
-// ensureKind builds (or finds) the entity definition of one kind. The
-// first declaration fixes the kind's config; hooks are per kind, not per
-// object — symmetric to a temporal-entity kind definition.
-func ensureKind(key string, cfg kindConfig) *kindEntry {
-	kinds.Lock()
-	defer kinds.Unlock()
-	if e, ok := kinds.m[key]; ok {
-		return e
-	}
+// newKind builds a definition scoped to one pipeline preparation.
+func newKind(key string, cfg kindConfig) *kindEntry {
 	cfg.defaults()
 	e := &kindEntry{key: key, cfg: cfg}
 	e.def = entdefine.New[k8sSpec, k8sState](entity.KindName(key),
@@ -105,18 +70,7 @@ func ensureKind(key string, cfg kindConfig) *kindEntry {
 	)
 	// The tree half: k8s resources are owned like every system record.
 	ownership.Register(e.def, func(s *k8sState) *ownership.State { return &s.State })
-	kinds.m[key] = e
 	return e
-}
-
-func lookupKind(key string) (*kindEntry, error) {
-	kinds.Lock()
-	defer kinds.Unlock()
-	e, ok := kinds.m[key]
-	if !ok {
-		return nil, fmt.Errorf("kind %q was not declared during the recording pass", key)
-	}
-	return e, nil
 }
 
 func (e *kindEntry) activityCtx(ctx workflow.Context) workflow.Context {
