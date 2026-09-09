@@ -9,11 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/graphene-ci/library/docker/internal/contract"
 	"github.com/graphene-ci/temporal-entity/pkg/entclient"
 	"github.com/graphene-ci/temporal-entity/pkg/entdefine"
 	entity "github.com/graphene-ci/temporal-entity/pkg/entity"
@@ -37,19 +36,7 @@ const (
 )
 
 // containerSpec is the container entity's desired state.
-type containerSpec struct {
-	Name   string                `json:"name"`
-	Config *container.Config     `json:"config"`
-	Host   *container.HostConfig `json:"host,omitempty"`
-	Owner  ref.OwnerRef          `json:"owner,omitempty"`
-	// Flows are the declared outgoing edges of this container (Р-Н25) —
-	// carried into the record's state for the topology view.
-	Flows []ownership.Flow `json:"flows,omitempty"`
-	// Scrape is a prometheus metrics endpoint the container exposes; the
-	// observation beat pulls it and ships the samples as the container's
-	// own metrics (Р-Н27). Empty disables scraping.
-	Scrape string `json:"scrape,omitempty"`
-}
+type containerSpec = contract.ContainerSpec
 
 type containerState struct {
 	Info Info `json:"info"`
@@ -137,7 +124,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
-			st.State.Flows = spec.Flows
+			st.Flows = spec.Flows
 			st.Scrape = spec.Scrape
 			st.Name = spec.Name // recorded BEFORE create, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
@@ -259,35 +246,21 @@ func networkDef() *entdefine.Definition[networkSpec, networkState] {
 }
 
 // declareRequest asks the declare activity for one docker entity.
-type declareRequest struct {
-	Kind   entity.KindName   `json:"kind"`
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels,omitempty"`
-	RunId  string            `json:"runId,omitempty"`
-	// Spec is the kind-shaped spec as JSON.
-	Spec json.RawMessage `json:"spec"`
-}
+type declareRequest = contract.DeclareRequest
 
-const declareActivityName = "docker.entity.declare"
+const declareActivityName = contract.DeclareActivity
 
-var declared struct {
+type definitions struct {
 	container *entdefine.Definition[containerSpec, containerState]
 	volume    *entdefine.Definition[volumeSpec, volumeState]
 	network   *entdefine.Definition[networkSpec, networkState]
 }
 
-// recordOnce guards recordEntities: the constructor calls it on EVERY
-// container/volume/network declared, but the definitions, activities and
-// the worker hook must register exactly ONCE — a second RecordWorker
-// hook re-registers the "docker" workflow and panics ("already
-// registered"). The recording pass is one per process, so a process-wide
-// Once is the right scope.
-var recordOnce sync.Once
-
-// recordEntities registers the definitions and the declare activity —
-// once per process, during the recording pass.
+// recordEntities records definitions once per pipeline preparation.
 func recordEntities(ctx pipeline.Context) {
-	recordOnce.Do(func() { recordEntitiesOnce(ctx) })
+	if ctx.RecordOnce("docker.entities") {
+		recordEntitiesOnce(ctx)
+	}
 }
 
 func recordEntitiesOnce(ctx pipeline.Context) {
@@ -309,12 +282,8 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 	ctx.RecordActivity(volumeRemoveActivityName, volumeRemoveActivity)
 	ctx.RecordActivity(networkEnsureActivityName, networkEnsureActivity)
 	ctx.RecordActivity(networkRemoveActivityName, networkRemoveActivity)
+	declared := definitions{container: containerDef(), volume: volumeDef(), network: networkDef()}
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
-		if declared.container == nil {
-			declared.container = containerDef()
-			declared.volume = volumeDef()
-			declared.network = networkDef()
-		}
 		if err := declared.container.Register(w); err != nil {
 			return err
 		}
@@ -324,7 +293,7 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 		if err := declared.network.Register(w); err != nil {
 			return err
 		}
-		w.RegisterActivityWithOptions(makeDeclare(cl), temporalactivity.RegisterOptions{Name: declareActivityName})
+		w.RegisterActivityWithOptions(makeDeclare(cl, declared), temporalactivity.RegisterOptions{Name: declareActivityName})
 		return nil
 	})
 }
@@ -332,7 +301,7 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 // makeDeclare builds the declare activity: create (or attach to) the
 // entity ON THIS EXECUTOR'S OWN QUEUE and wait for readiness. The
 // record then owns the executor's lifetime, not the other way around.
-func makeDeclare(cl client.Client) func(context.Context, declareRequest) (json.RawMessage, error) {
+func makeDeclare(cl client.Client, declared definitions) func(context.Context, declareRequest) (json.RawMessage, error) {
 	return func(ctx context.Context, req declareRequest) (json.RawMessage, error) {
 		if err := wire.ValidateUserLabels(req.Labels); err != nil {
 			return nil, err

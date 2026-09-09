@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sync"
 	"time"
 
 	"github.com/graphene-ci/temporal-entity/pkg/entclient"
@@ -104,7 +103,7 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
-			st.State.Flows = spec.Flows
+			st.Flows = spec.Flows
 			// Record the path BEFORE the write runs, so a cancel that cuts
 			// writeActivity mid-write (the file may already be on disk) still
 			// finalizes and removes it — a persistent machine has no reaper.
@@ -194,15 +193,11 @@ type declareRequest struct {
 
 const declareActivityName = "file.declare"
 
-var declared *entdefine.Definition[fileSpec, fileState]
-
-// recordOnce guards recordEntities: File is called on every file, but
-// the definition, activities and worker hook register exactly ONCE — a
-// second RecordWorker hook re-registers the "file" workflow and panics.
-var recordOnce sync.Once
-
+// recordEntities scopes registration to a pipeline preparation.
 func recordEntities(ctx pipeline.Context) {
-	recordOnce.Do(func() { recordEntitiesOnce(ctx) })
+	if ctx.RecordOnce("file.entities") {
+		recordEntitiesOnce(ctx)
+	}
 }
 
 func recordEntitiesOnce(ctx pipeline.Context) {
@@ -211,19 +206,17 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 		"a file on the agent's machine, written and removed with the record", reflect.TypeOf(fileSpec{}), allDims)
 	ctx.RecordActivity(writeActivityName, writeActivity)
 	ctx.RecordActivity(removeActivityName, removeActivity)
+	declared := fileDef()
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
-		if declared == nil {
-			declared = fileDef()
-		}
 		if err := declared.Register(w); err != nil {
 			return err
 		}
-		w.RegisterActivityWithOptions(makeDeclare(cl), temporalactivity.RegisterOptions{Name: declareActivityName})
+		w.RegisterActivityWithOptions(makeDeclare(cl, declared), temporalactivity.RegisterOptions{Name: declareActivityName})
 		return nil
 	})
 }
 
-func makeDeclare(cl client.Client) func(context.Context, declareRequest) (json.RawMessage, error) {
+func makeDeclare(cl client.Client, declared *entdefine.Definition[fileSpec, fileState]) func(context.Context, declareRequest) (json.RawMessage, error) {
 	return func(ctx context.Context, req declareRequest) (json.RawMessage, error) {
 		if err := wire.ValidateUserLabels(req.Labels); err != nil {
 			return nil, err

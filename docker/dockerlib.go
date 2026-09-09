@@ -140,6 +140,7 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 		opts = append([]pipeline.ResourceOption{pipeline.Parent(h)}, opts...)
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
+	pipeline.AdoptChildren(ctx, self, o.Children)
 	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent, Flows: o.Flows, Scrape: spec.Scrape})
 	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
 		Kind: ContainerKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,

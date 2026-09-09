@@ -5,10 +5,11 @@ go 1.26.5
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/graphene-ci/pipeline v0.0.0-20260902121639-5393e0e4342e
+	github.com/graphene-ci/pipeline v0.2.0
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.71.0
+	github.com/stretchr/testify v1.12.1
 	go.temporal.io/sdk v1.47.0
 )
 
@@ -28,17 +29,22 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.4 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/go-containerregistry v0.21.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gopherex/schemapb/go v0.0.0-20260805100557-b08e53066d63 // indirect
+	github.com/gopherex/schemapb/go v0.0.0-20260904155309-67a92c03b7e6 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
+	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
@@ -52,7 +58,6 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.12.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect
@@ -71,6 +76,7 @@ require (
 	go.temporal.io/api v1.63.5 // indirect
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.58.0 // indirect

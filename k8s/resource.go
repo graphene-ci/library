@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/graphene-ci/library/k8s/internal/contract"
+
 	"github.com/graphene-ci/temporal-entity/pkg/entclient"
 	entity "github.com/graphene-ci/temporal-entity/pkg/entity"
 	"go.temporal.io/sdk/activity"
@@ -169,6 +171,11 @@ func (c conf[T]) timeoutOrDefault() time.Duration {
 // config and records everything the workers need: the ops activities,
 // the definition registration, and (once) the declare activity.
 func ensureKindRecorded[T any](ctx pipeline.Context, kindKey string, cfg conf[T]) {
+	if !ctx.RecordOnce("k8s.kind/" + kindKey) {
+		return
+	}
+	registry := ctx.RecordValue("k8s.registry", func() any { return map[string]*kindEntry{} }).(map[string]*kindEntry)
+
 	untyped := kindConfig{
 		reconcileEvery: cfg.reconcileEvery,
 		pollInterval:   cfg.pollInterval,
@@ -198,7 +205,10 @@ func ensureKindRecorded[T any](ctx pipeline.Context, kindKey string, cfg conf[T]
 			return drifted(d, l), nil
 		}
 	}
-	e := ensureKind(kindKey, untyped)
+	e := newKind(kindKey, untyped)
+	registry[kindKey] = e
+	knowledge := ctx.RecordValue(contract.RegistrationKey, func() any { return map[string]contract.Knowledge{} }).(map[string]contract.Knowledge)
+	knowledge[kindKey] = contract.Knowledge{Ready: e.cfg.ready, Timeout: e.cfg.timeout, PollInterval: e.cfg.pollInterval}
 
 	ctx.RecordActivity(applyActivityName, applyActivity)
 	ctx.RecordActivity(observeActivityName, observeActivity)
@@ -206,43 +216,33 @@ func ensureKindRecorded[T any](ctx pipeline.Context, kindKey string, cfg conf[T]
 	ctx.RecordWorker(func(w worker.Worker, _ client.Client) error {
 		return e.def.Register(w)
 	})
-	recordDeclareOnce(ctx)
+	recordDeclareOnce(ctx, registry)
 }
 
 // declareActivityName is the builtin that starts (or attaches to) the
 // entity and waits for readiness — the run-worker mirror of the server's
 // declare activities for system resources.
-const declareActivityName = "k8s.entity.declare"
+const declareActivityName = contract.DeclareActivity
 
 // declareRequest asks the declare activity for one entity.
-type declareRequest struct {
-	Kind      string            `json:"kind"`
-	Name      string            `json:"name"`
-	TaskQueue string            `json:"taskQueue"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	RunId     string            `json:"runId,omitempty"`
-	Spec      k8sSpec           `json:"spec"`
-}
+type declareRequest = contract.DeclareRequest
 
-var declareRecorded bool // recording pass is single-threaded, pre-worker
-
-func recordDeclareOnce(ctx pipeline.Context) {
-	if declareRecorded {
+func recordDeclareOnce(ctx pipeline.Context, registry map[string]*kindEntry) {
+	if !ctx.RecordOnce("k8s.declare") {
 		return
 	}
-	declareRecorded = true
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
-		w.RegisterActivityWithOptions(makeDeclare(cl), activity.RegisterOptions{Name: declareActivityName})
+		w.RegisterActivityWithOptions(makeDeclare(cl, registry), activity.RegisterOptions{Name: declareActivityName})
 		return nil
 	})
 }
 
 // makeDeclare builds the declare activity over the worker's own client.
-func makeDeclare(cl client.Client) func(context.Context, declareRequest) (k8sState, error) {
+func makeDeclare(cl client.Client, registry map[string]*kindEntry) func(context.Context, declareRequest) (k8sState, error) {
 	return func(ctx context.Context, req declareRequest) (k8sState, error) {
-		e, err := lookupKind(req.Kind)
-		if err != nil {
-			return k8sState{}, err
+		e, ok := registry[req.Kind]
+		if !ok {
+			return k8sState{}, fmt.Errorf("kind %q was not declared during the recording pass", req.Kind)
 		}
 		if err := wire.ValidateUserLabels(req.Labels); err != nil {
 			return k8sState{}, err
