@@ -46,8 +46,9 @@ func Install() activity.Call[InstallReport] {
 		}
 		// The DISTRIBUTION decides the package manager — read from the
 		// machine's own /etc/os-release, never guessed. get.docker.com
-		// goes first (it speaks most deb/rpm families and geo-blocks
-		// are the reason for the fallback); the case below covers what
+		// goes first with a bounded installer (including its child downloads).
+		// It speaks most deb/rpm families, and geo-blocks
+		// are the reason for the fallback; the case below covers what
 		// it does not: ALT, Arch, Alpine, SUSE. Package hooks must not
 		// start services inside the chroot (policy-rc.d 101) — the
 		// daemon is brought up through the host's systemd afterwards.
@@ -57,7 +58,7 @@ func Install() activity.Call[InstallReport] {
 				"export DEBIAN_FRONTEND=noninteractive; "+
 				". /etc/os-release 2>/dev/null || ID=unknown; "+
 				"family=\"$ID $ID_LIKE\"; "+
-				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null && sh /tmp/get-docker.sh; then :; else "+
+				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null && timeout -k 15 180 sh /tmp/get-docker.sh; then :; else "+
 				"case \"$family\" in "+
 				"*altlinux*) apt-get update -qq && apt-get install -y -qq docker-engine ;; "+
 				"*debian*|*ubuntu*) apt-get update -qq && apt-get install -y -qq docker.io ;; "+
