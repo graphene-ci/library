@@ -54,7 +54,9 @@ func Install() activity.Call[InstallReport] {
 		// daemon is brought up through the host's systemd afterwards.
 		script := machine.Shell(ctx,
 			"printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; "+
-				"trap 'rm -f /usr/sbin/policy-rc.d' EXIT; "+
+				"apt_config=$(mktemp /tmp/graphene-apt.XXXXXX) || exit 1; "+
+				"trap 'rm -f /usr/sbin/policy-rc.d \"$apt_config\"' EXIT; "+
+				aptLockWaitConfig+
 				"export DEBIAN_FRONTEND=noninteractive; "+
 				". /etc/os-release 2>/dev/null || ID=unknown; "+
 				"family=\"$ID $ID_LIKE\"; "+
@@ -88,6 +90,15 @@ func Install() activity.Call[InstallReport] {
 		return InstallReport{Version: version, Installed: true}, nil
 	})
 }
+
+// A fresh Debian/Ubuntu VM may still be running unattended-upgrades. Let APT
+// wait for its normal lock rather than exhausting activity retries immediately.
+// APT_CONFIG is inherited by get.docker.com's nested apt-get commands and the
+// distro fallback; neither host configuration nor the lock owner is modified.
+const aptLockWaitConfig = `if [ -n "${APT_CONFIG:-}" ]; then cat "$APT_CONFIG" > "$apt_config" || exit 1; fi;
+printf '\nDPkg::Lock::Timeout "120";\n' >> "$apt_config";
+export APT_CONFIG="$apt_config";
+`
 
 // publish records what this body just made true, right where it
 // happened: capability "docker" on the machine this container runs on.
