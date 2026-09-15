@@ -160,6 +160,7 @@ func heartbeat(ctx context.Context, message string) func() {
 	if !temporalactivity.IsActivity(ctx) {
 		return func() {}
 	}
+	temporalactivity.RecordHeartbeat(ctx, message)
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
