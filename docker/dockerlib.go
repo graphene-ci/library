@@ -36,59 +36,63 @@ type InstallReport struct {
 // verb is a Call: run it with pipelineactivity.Activity on one agent or
 // pipelineactivity.ActivityAll on a selection.
 func Install() activity.Call[InstallReport] {
-	return activity.Fn0("docker.install", func(ctx context.Context) (InstallReport, error) {
-		if version, err := dockerVersion(ctx); err == nil {
-			// Already there — still publish: the record must know.
-			if err := publish(ctx, version); err != nil {
-				return InstallReport{}, err
-			}
-			return InstallReport{Version: version}, nil
-		}
-		// The DISTRIBUTION decides the package manager — read from the
-		// machine's own /etc/os-release, never guessed. get.docker.com
-		// goes first with a bounded installer (including its child downloads).
-		// It speaks most deb/rpm families, and geo-blocks
-		// are the reason for the fallback; the case below covers what
-		// it does not: ALT, Arch, Alpine, SUSE. Package hooks must not
-		// start services inside the chroot (policy-rc.d 101) — the
-		// daemon is brought up through the host's systemd afterwards.
-		script := machine.Shell(ctx,
-			"printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; "+
-				"apt_config=$(mktemp /tmp/graphene-apt.XXXXXX) || exit 1; "+
-				"trap 'rm -f /usr/sbin/policy-rc.d \"$apt_config\"' EXIT; "+
-				aptLockWaitConfig+
-				"export DEBIAN_FRONTEND=noninteractive; "+
-				". /etc/os-release 2>/dev/null || ID=unknown; "+
-				"family=\"$ID $ID_LIKE\"; "+
-				"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null && timeout -k 15 180 sh /tmp/get-docker.sh; then :; else "+
-				"case \"$family\" in "+
-				"*altlinux*) apt-get update -qq && apt-get install -y -qq docker-engine ;; "+
-				"*debian*|*ubuntu*) apt-get update -qq && apt-get install -y -qq docker.io ;; "+
-				"*fedora*) dnf install -y -q moby-engine ;; "+
-				"*rhel*|*centos*) (command -v dnf >/dev/null && dnf install -y -q docker) || yum install -y -q docker ;; "+
-				"*suse*) zypper --non-interactive install docker ;; "+
-				"*arch*) pacman -Sy --noconfirm docker ;; "+
-				"*alpine*) apk add --no-cache docker ;; "+
-				"*) echo \"no docker recipe for distribution: $family\" >&2; exit 1 ;; "+
-				"esac; fi")
-		if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
-			return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
-		}
-		// The chrooted installer cannot start the daemon itself; the
-		// host's systemd is reachable through the machine root.
-		start := machine.Shell(ctx, "systemctl enable --now docker 2>/dev/null || rc-update add docker boot 2>/dev/null && rc-service docker start 2>/dev/null || service docker start 2>/dev/null || true")
-		if out, err := obs.RunTail(ctx, start, errTailBytes); err != nil {
-			return InstallReport{}, fmt.Errorf("start docker: %w: %s", err, out)
-		}
-		version, err := dockerVersion(ctx)
-		if err != nil {
-			return InstallReport{}, err
-		}
+	return activity.Fn0("docker.install", install)
+}
+
+func install(ctx context.Context) (InstallReport, error) {
+	stop := heartbeat(ctx, "installing docker")
+	defer stop()
+	if version, err := dockerVersion(ctx); err == nil {
+		// Already there — still publish: the record must know.
 		if err := publish(ctx, version); err != nil {
 			return InstallReport{}, err
 		}
-		return InstallReport{Version: version, Installed: true}, nil
-	})
+		return InstallReport{Version: version}, nil
+	}
+	// The DISTRIBUTION decides the package manager — read from the
+	// machine's own /etc/os-release, never guessed. get.docker.com
+	// goes first with a bounded installer (including its child downloads).
+	// It speaks most deb/rpm families, and geo-blocks
+	// are the reason for the fallback; the case below covers what
+	// it does not: ALT, Arch, Alpine, SUSE. Package hooks must not
+	// start services inside the chroot (policy-rc.d 101) — the
+	// daemon is brought up through the host's systemd afterwards.
+	script := machine.Shell(ctx,
+		"printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d; "+
+			"apt_config=$(mktemp /tmp/graphene-apt.XXXXXX) || exit 1; "+
+			"trap 'rm -f /usr/sbin/policy-rc.d \"$apt_config\"' EXIT; "+
+			aptLockWaitConfig+
+			"export DEBIAN_FRONTEND=noninteractive; "+
+			". /etc/os-release 2>/dev/null || ID=unknown; "+
+			"family=\"$ID $ID_LIKE\"; "+
+			"if curl -fsSL -m 30 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null && timeout -k 15 180 sh /tmp/get-docker.sh; then :; else "+
+			"case \"$family\" in "+
+			"*altlinux*) apt-get update -qq && apt-get install -y -qq docker-engine ;; "+
+			"*debian*|*ubuntu*) apt-get update -qq && apt-get install -y -qq docker.io ;; "+
+			"*fedora*) dnf install -y -q moby-engine ;; "+
+			"*rhel*|*centos*) (command -v dnf >/dev/null && dnf install -y -q docker) || yum install -y -q docker ;; "+
+			"*suse*) zypper --non-interactive install docker ;; "+
+			"*arch*) pacman -Sy --noconfirm docker ;; "+
+			"*alpine*) apk add --no-cache docker ;; "+
+			"*) echo \"no docker recipe for distribution: $family\" >&2; exit 1 ;; "+
+			"esac; fi")
+	if out, err := obs.RunTail(ctx, script, errTailBytes); err != nil {
+		return InstallReport{}, fmt.Errorf("install docker: %w: %s", err, out)
+	}
+	// The chrooted installer cannot start the daemon itself; the
+	// host's systemd is reachable through the machine root.
+	start := machine.Shell(ctx, "systemctl enable --now docker 2>/dev/null || rc-update add docker boot 2>/dev/null && rc-service docker start 2>/dev/null || service docker start 2>/dev/null || true")
+	if out, err := obs.RunTail(ctx, start, errTailBytes); err != nil {
+		return InstallReport{}, fmt.Errorf("start docker: %w: %s", err, out)
+	}
+	version, err := dockerVersion(ctx)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	if err := publish(ctx, version); err != nil {
+		return InstallReport{}, err
+	}
+	return InstallReport{Version: version, Installed: true}, nil
 }
 
 // A fresh Debian/Ubuntu VM may still be running unattended-upgrades. Let APT
