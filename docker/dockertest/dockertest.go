@@ -8,11 +8,25 @@ import (
 
 	dockerlib "github.com/graphene-ci/library/docker"
 	"github.com/graphene-ci/library/docker/internal/contract"
+	"github.com/graphene-ci/pipeline/pkg/id"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/pipelinetest"
 	"github.com/graphene-ci/pipeline/pkg/ref"
+	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
+
+// OnJob is the replacement of ONE job on one agent, picked by the job's
+// name: dockerlib.Job is a single activity, its spec tells the jobs apart.
+// Like every machine body a job has no default — what a container prints is
+// the test's own data:
+//
+//	dockertest.OnJob(w, "runner-1", "bench").Return(dockerlib.JobReport{Stdout: "42\n"}, nil).Once()
+func OnJob(world *pipelinetest.World, agent id.AgentId, name string) *testsuite.MockCallWrapper {
+	return world.OnAgentActivity(agent, "docker.job", mock.Anything,
+		mock.MatchedBy(func(spec dockerlib.JobSpec) bool { return spec.Name == name }))
+}
 
 // Install installs deterministic container/volume/network outputs and the
 // docker.install capability effect. version is explicit test data.
