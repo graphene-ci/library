@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/graphene-ci/pipeline v0.2.0
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
+	github.com/stretchr/testify v1.12.0
 	go.temporal.io/sdk v1.47.0
 )
 
@@ -40,7 +41,6 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.12.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0 // indirect

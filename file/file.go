@@ -2,7 +2,8 @@
 // inverse of an artifact. artifact reads bytes FROM a machine into a
 // blob; a File writes bytes ONTO a machine, and the file itself is a
 // record in the tree (owned, cascaded, observed): Init writes it,
-// Finalize removes it. A container mounts it (docker.WithFileMount).
+// Finalize removes it. A container reaches it the docker way — a bind
+// mount of its directory (container.HostConfig.Mounts).
 //
 // Content sources come from package file (pipeline/pkg/file): FromBytes,
 // FromEmbed (the user ships config via //go:embed). Secret/Artifact
@@ -29,6 +30,7 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/graphene-ci/library/file/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/file"
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
 	"github.com/graphene-ci/pipeline/pkg/machine"
@@ -46,22 +48,8 @@ type Info struct {
 	Path string `json:"path"`
 }
 
-// fileSpec is what a File record IS.
-type fileSpec struct {
-	Path string `json:"path"`
-	// Content is inline bytes (FromBytes/FromEmbed). Small configs only;
-	// a secret's value never travels here.
-	Content []byte `json:"content,omitempty"`
-	// Secret is the NAME of a secret; the agent resolves the value on the
-	// machine (worker plane), so it never sits in the spec.
-	Secret string `json:"secret,omitempty"`
-	// ArtifactLocation is the resolved blob location of an artifact
-	// source (name → location done client-side); the agent streams it.
-	ArtifactLocation string           `json:"artifactLocation,omitempty"`
-	Mode             uint32           `json:"mode,omitempty"`
-	Owner            ref.OwnerRef     `json:"owner,omitempty"`
-	Flows            []ownership.Flow `json:"flows,omitempty"`
-}
+// fileSpec is what a File record IS — shared with the test adapter.
+type fileSpec = contract.FileSpec
 
 type fileState struct {
 	ownership.State
@@ -184,14 +172,9 @@ func removeActivity(ctx context.Context, path string) error {
 }
 
 // declareRequest asks the declare activity for one file.
-type declareRequest struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels,omitempty"`
-	RunId  string            `json:"runId,omitempty"`
-	Spec   json.RawMessage   `json:"spec"`
-}
+type declareRequest = contract.DeclareRequest
 
-const declareActivityName = "file.declare"
+const declareActivityName = contract.DeclareActivity
 
 // recordEntities scopes registration to a pipeline preparation.
 func recordEntities(ctx pipeline.Context) {
