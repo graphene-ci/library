@@ -144,6 +144,13 @@ func jobActivity(ctx context.Context, spec JobSpec) (JobReport, error) {
 			return report, fmt.Errorf("job %s: %s", spec.Name, res.Error.Message)
 		}
 		report.ExitCode = int(res.StatusCode)
+		if report.ExitCode != 0 {
+			// An outcome, not an activity failure — but in the run's logs
+			// it must not look like every other line: the tool's own
+			// output carries no severity, this record does.
+			obs.Warn(ctx, fmt.Sprintf("job %s exited with status %d", spec.Name, report.ExitCode),
+				obs.Str("job", spec.Name), obs.Int("exitCode", report.ExitCode))
+		}
 		return report, nil
 	case err := <-errCh:
 		return report, fmt.Errorf("job %s: wait: %w", spec.Name, err)
@@ -211,27 +218,46 @@ func createJobLog(name string) (string, *os.File, error) {
 // to the log file and to obs; stdout is also kept (bounded) for the
 // report, the end of the merged stream as the tail. Docker multiplexes
 // stdout and stderr into one stream unless the container has a TTY.
+//
+// Each stream assembles its OWN lines: docker's frames interleave at any
+// byte, and one shared buffer would splice the unfinished line of one
+// stream into the other's. The sinks stay shared — the file and the tail
+// are the merged output as docker delivered it.
 func drainJobOutput(ctx context.Context, src io.Reader, tty bool, logFile io.Writer, name string) (stdout, tail string, err error) {
 	head := &headBuffer{limit: jobStdoutLimit}
 	end := &tailBuffer{limit: jobTailLimit}
-	lines := &jobLineWriter{ctx: ctx, name: name, sinks: io.MultiWriter(logFile, end)}
-	out := io.MultiWriter(lines, head)
+	sinks := io.MultiWriter(logFile, end)
+	outLines := &jobLineWriter{ctx: ctx, name: name, stream: streamStdout, sinks: sinks}
+	errLines := &jobLineWriter{ctx: ctx, name: name, stream: streamStderr, sinks: sinks}
+	out := io.MultiWriter(outLines, head)
 	if tty {
 		_, err = io.Copy(out, src)
 	} else {
-		_, err = stdcopy.StdCopy(out, lines, src)
+		_, err = stdcopy.StdCopy(out, errLines, src)
 	}
-	lines.flush()
+	outLines.flush()
+	errLines.flush()
 	return head.String(), end.String(), err
 }
 
+// The stream a line came from rides on its log record. It is NOT a
+// severity: half the tools in the world log their ordinary progress to
+// stderr, and pytest prints its failures to stdout.
+const (
+	streamStdout = "stdout"
+	streamStderr = "stderr"
+)
+
 // jobLineWriter passes bytes through to its sinks and emits every
-// complete line as a log record of the run.
+// complete line of ONE stream as a log record of the run.
 type jobLineWriter struct {
 	ctx     context.Context //nolint:containedctx // a writer has no call to carry it
 	name    string
+	stream  string
 	sinks   io.Writer
 	partial []byte
+	// record replaces the obs emission in tests.
+	record func(stream, line string)
 }
 
 func (w *jobLineWriter) Write(p []byte) (int, error) {
@@ -267,7 +293,12 @@ func (w *jobLineWriter) flush() {
 }
 
 func (w *jobLineWriter) emit(line []byte) {
-	obs.Info(w.ctx, string(bytes.TrimRight(line, "\r")), obs.Str("job", w.name))
+	text := string(bytes.TrimRight(line, "\r"))
+	if w.record != nil {
+		w.record(w.stream, text)
+		return
+	}
+	obs.Info(w.ctx, text, obs.Str("job", w.name), obs.Str("stream", w.stream))
 }
 
 // headBuffer keeps the first limit bytes and drops the rest.

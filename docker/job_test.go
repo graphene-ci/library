@@ -52,6 +52,28 @@ func TestDrainJobOutputSplitsStreams(t *testing.T) {
 	require.Equal(t, logFile.String(), tail)
 }
 
+// Docker's frames interleave at any byte. Each stream assembles its own
+// lines: an unfinished stdout line must not be spliced into stderr's.
+func TestDrainJobOutputKeepsStreamsApart(t *testing.T) {
+	t.Parallel()
+	var wire bytes.Buffer
+	stdout, stderr := stdcopy.NewStdWriter(&wire, stdcopy.Stdout), stdcopy.NewStdWriter(&wire, stdcopy.Stderr)
+	_, _ = stdout.Write([]byte("3 pas"))
+	_, _ = stderr.Write([]byte("warming up\n"))
+	_, _ = stdout.Write([]byte("sed\n"))
+
+	type rec struct{ stream, line string }
+	var got []rec
+	record := func(stream, line string) { got = append(got, rec{stream, line}) }
+	sinks := &bytes.Buffer{}
+	outLines := &jobLineWriter{stream: streamStdout, sinks: sinks, record: record}
+	errLines := &jobLineWriter{stream: streamStderr, sinks: sinks, record: record}
+	_, err := stdcopy.StdCopy(outLines, errLines, &wire)
+	require.NoError(t, err)
+	require.Equal(t, []rec{{streamStderr, "warming up"}, {streamStdout, "3 passed"}}, got)
+	require.Equal(t, "3 paswarming up\nsed\n", sinks.String(), "the file is the merged output as docker delivered it")
+}
+
 // A container with a TTY writes one raw stream: no frames to strip.
 func TestDrainJobOutputTTY(t *testing.T) {
 	t.Parallel()
