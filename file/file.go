@@ -88,10 +88,11 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 		entdefine.WithSearchAttributes[fileSpec, fileState](true),
 		entdefine.WithInit[fileSpec, fileState](func(ctx workflow.Context, spec fileSpec) (fileState, error) {
 			var st fileState
+			// Flows BEFORE Init: Init mirrors owner and edges into visibility.
+			st.Flows = spec.Flows
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
-			st.Flows = spec.Flows
 			// Record the path BEFORE the write runs, so a cancel that cuts
 			// writeActivity mid-write (the file may already be on disk) still
 			// finalizes and removes it — a persistent machine has no reaper.

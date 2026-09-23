@@ -121,10 +121,13 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 		entdefine.WithSearchAttributes[containerSpec, containerState](true),
 		entdefine.WithInit[containerSpec, containerState](func(ctx workflow.Context, spec containerSpec) (containerState, error) {
 			var st containerState
+			// Flows BEFORE Init: Init mirrors the ownership state — owner and
+			// edges — into visibility, and a listing draws the topology
+			// from that mirror.
+			st.Flows = spec.Flows
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
-			st.Flows = spec.Flows
 			st.Scrape = spec.Scrape
 			st.Name = spec.Name // recorded BEFORE create, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
