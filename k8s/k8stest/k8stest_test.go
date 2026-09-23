@@ -70,3 +70,45 @@ func TestUnsatisfiedPredicateTimesOut(t *testing.T) {
 	require.ErrorContains(t, w.Env.GetWorkflowError(), "did not become ready within 3s")
 	w.AssertNoLeaks(t)
 }
+
+// A test that does not know which objects a run will declare answers them
+// all with one default; a fixture set by name still wins.
+func TestSetDefaultAnswersUnnamedObjects(t *testing.T) {
+	t.Parallel()
+	var suite testsuite.WorkflowTestSuite
+	w := pipelinetest.Install(t, suite.NewTestWorkflowEnvironment())
+	objects := k8stest.Install(w)
+	var seen []string
+	objects.SetDefault(func(kind, name string, manifest map[string]any) any {
+		seen = append(seen, kind+"/"+name)
+		require.Equal(t, "ConfigMap", manifest["kind"], "the default sees the declared manifest")
+		return map[string]any{"status": map[string]any{"phase": "default"}}
+	})
+	require.NoError(t, objects.Set("k8s..v1.ConfigMap/named", map[string]any{"status": map[string]any{"phase": "named"}}))
+	wf := pipelinetest.Workflow(w, "defaults", func(ctx pipeline.Context, _ struct{}) ([]string, error) {
+		client := k8slib.NewClientFromSecret(pipeline.UseSecret("cluster"))
+		ready := func(live *unstructured.Unstructured) bool {
+			phase, _, _ := unstructured.NestedString(live.Object, "status", "phase")
+			return phase != ""
+		}
+		var phases []string
+		for _, name := range []string{"named", "unnamed"} {
+			object := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}
+			live := k8slib.Resource(ctx, client, name, object,
+				k8slib.WithTimeout[unstructured.Unstructured](5*time.Second), k8slib.WithReady(ready)).Ready(ctx)
+			if ctx.Recording() {
+				continue
+			}
+			phase, _, _ := unstructured.NestedString(live.Object, "status", "phase")
+			phases = append(phases, phase)
+		}
+		return phases, nil
+	})
+	w.Env.ExecuteWorkflow(wf, struct{}{})
+	require.NoError(t, w.Env.GetWorkflowError())
+	var got []string
+	require.NoError(t, w.Env.GetWorkflowResult(&got))
+	require.Equal(t, []string{"named", "default"}, got)
+	require.Equal(t, []string{"k8s..v1.ConfigMap/unnamed"}, seen, "the default is asked only for objects without a fixture")
+	w.AssertNoLeaks(t)
+}

@@ -22,6 +22,7 @@ type Objects struct {
 	world     *pipelinetest.World
 	mu        sync.Mutex
 	live      map[ref.OwnerRef]map[string]any
+	fallback  func(kind, name string, manifest map[string]any) any
 	knowledge map[string]contract.Knowledge
 }
 
@@ -56,6 +57,42 @@ func (o *Objects) Set(name ref.OwnerRef, live any) error {
 	return nil
 }
 
+// SetDefault answers for every object the test did not name with Set: the
+// function receives the declared kind, name and manifest and returns the
+// observed fields (nil — nothing observed yet, the object waits). It is how
+// a test meets whatever a RunSpec declares without knowing the names in
+// advance; a Set for a specific object still wins.
+func (o *Objects) SetDefault(fn func(kind, name string, manifest map[string]any) any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.fallback = fn
+}
+
+// observed answers the fields the test supplied for name: an explicit
+// fixture first, the default otherwise.
+func (o *Objects) observed(kind, name string, ref ref.OwnerRef, manifest map[string]any) (map[string]any, bool, error) {
+	o.mu.Lock()
+	object, exists := o.live[ref]
+	fallback := o.fallback
+	o.mu.Unlock()
+	if exists || fallback == nil {
+		return object, exists, nil
+	}
+	live := fallback(kind, name, overlay(manifest, nil))
+	if live == nil {
+		return nil, false, nil
+	}
+	raw, err := json.Marshal(live)
+	if err != nil {
+		return nil, false, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, false, err
+	}
+	return out, out != nil, nil
+}
+
 func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (any, error) {
 	if queue := workflow.GetActivityOptions(ctx).TaskQueue; queue != req.TaskQueue || queue != wire.RunQueue(id.RunId(req.RunId)) {
 		return nil, fmt.Errorf("kubernetes declaration must run on its run queue, got %q", queue)
@@ -74,9 +111,10 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 		if err := o.world.Failure(name); err != nil {
 			return nil, err
 		}
-		o.mu.Lock()
-		observed, exists := o.live[name]
-		o.mu.Unlock()
+		observed, exists, err := o.observed(req.Kind, req.Name, name, req.Spec.Manifest)
+		if err != nil {
+			return nil, err
+		}
 		if exists {
 			live := overlay(req.Spec.Manifest, observed)
 			ready, err := knowledge.Ready(live)
