@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -33,6 +34,7 @@ const (
 // opRequest travels to every ops activity: which cluster (by secret
 // NAME) and which object.
 type opRequest struct {
+	InCluster  bool               `json:"in_cluster,omitempty"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
 	Manifest   map[string]any     `json:"manifest"`
 }
@@ -97,13 +99,9 @@ func deleteActivity(ctx context.Context, req opRequest) error {
 // dynamic client plus the REST mapping for the object.
 func dial(ctx context.Context, req opRequest) (dynamic.Interface, schema.GroupVersionResource, *unstructured.Unstructured, error) {
 	u := &unstructured.Unstructured{Object: req.Manifest}
-	value, err := secretsapi.Resolve(ctx, req.Kubeconfig)
+	cfg, err := connectionConfig(ctx, req, secretsapi.Resolve, rest.InClusterConfig)
 	if err != nil {
 		return nil, schema.GroupVersionResource{}, nil, err
-	}
-	cfg, err := clientcmd.RESTConfigFromKubeConfig([]byte(value))
-	if err != nil {
-		return nil, schema.GroupVersionResource{}, nil, fmt.Errorf("kubeconfig: %w", err)
 	}
 	cli, err := dynamic.NewForConfig(cfg)
 	if err != nil {
@@ -139,4 +137,39 @@ func isReady(u *unstructured.Unstructured) bool {
 		}
 	}
 	return false
+}
+
+func connectionConfig(ctx context.Context, req opRequest, resolve func(context.Context, pipeline.SecretRef) (string, error), inCluster func() (*rest.Config, error)) (*rest.Config, error) {
+	if req.InCluster {
+		if req.Kubeconfig.Name != "" {
+			return nil, fmt.Errorf("in-cluster and kubeconfig identities are mutually exclusive")
+		}
+		return inCluster()
+	}
+	if req.Kubeconfig.Name == "" {
+		return nil, fmt.Errorf("kubeconfig secret reference is required")
+	}
+	value, err := resolve(ctx, req.Kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := clientcmd.RESTConfigFromKubeConfig([]byte(value))
+	if err != nil {
+		return nil, fmt.Errorf("kubeconfig: %w", err)
+	}
+	return cfg, nil
+}
+
+// ObjectClient resolves this connection inside an activity and returns the
+// native API for one object's kind and namespace. Use Resource for run-owned
+// objects. This activity-only escape hatch serves externally owned configuration
+// with an explicit application lifecycle; it does not register an entity or
+// provide automatic cleanup. Never pass secret contents to workflow arguments
+// or return them as activity results.
+func (c *Client) ObjectClient(ctx context.Context, object *unstructured.Unstructured) (dynamic.ResourceInterface, error) {
+	cli, gvr, u, err := dial(ctx, opRequest{Kubeconfig: c.kubeconfig, InCluster: c.inCluster, Manifest: object.Object})
+	if err != nil {
+		return nil, err
+	}
+	return cli.Resource(gvr).Namespace(u.GetNamespace()), nil
 }

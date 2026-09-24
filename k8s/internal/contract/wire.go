@@ -12,6 +12,7 @@ const DeclareActivity = "k8s.entity.declare"
 // Spec is the desired manifest, credential reference and owner.
 type Spec struct {
 	Manifest   map[string]any     `json:"manifest"`
+	InCluster  bool               `json:"in_cluster,omitempty"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
 	// Owner is the initial owner in the tree (the run by default).
 	Owner ref.OwnerRef `json:"owner,omitempty"`
@@ -25,6 +26,7 @@ type State struct {
 	Live       map[string]any     `json:"live,omitempty"`
 	Heals      int                `json:"heals,omitempty"`
 	Drifted    bool               `json:"drifted,omitempty"`
+	InCluster  bool               `json:"in_cluster,omitempty"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
 	// Owned is the tree half: current owner, transfer command, the
 	// EntityOwner/KeepUntil mirrors.

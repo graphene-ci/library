@@ -132,7 +132,7 @@ func Resource[T any](ctx pipeline.Context, c *Client, name string, obj *T, opts 
 		TaskQueue: wire.RunQueue(ctx.RunId()),
 		Labels:    o.Labels,
 		RunId:     string(ctx.RunId()),
-		Spec:      k8sSpec{Manifest: manifest, Kubeconfig: c.kubeconfig, Owner: o.Parent},
+		Spec:      k8sSpec{Manifest: manifest, Kubeconfig: c.kubeconfig, InCluster: c.inCluster, Owner: o.Parent},
 	}
 	workflow.Go(ctx, func(gctx workflow.Context) {
 		actx := workflow.WithActivityOptions(gctx, workflow.ActivityOptions{

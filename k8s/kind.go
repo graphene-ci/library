@@ -97,9 +97,10 @@ func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, er
 	// still leave the finalizer something to delete. Observed replaces
 	// it on readiness; delete tolerates not-found.
 	st.Kubeconfig = spec.Kubeconfig
+	st.InCluster = spec.InCluster
 	st.Live = spec.Manifest
 	actx := e.activityCtx(ctx)
-	req := opRequest{Kubeconfig: spec.Kubeconfig, Manifest: spec.Manifest}
+	req := opRequest{Kubeconfig: spec.Kubeconfig, InCluster: spec.InCluster, Manifest: spec.Manifest}
 	if err := workflow.ExecuteActivity(actx, applyActivityName, req).Get(ctx, nil); err != nil {
 		return st, fmt.Errorf("apply: %w", err)
 	}
@@ -117,6 +118,7 @@ func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, er
 			if ready {
 				st.Live = obs.Manifest
 				st.Kubeconfig = spec.Kubeconfig
+				st.InCluster = spec.InCluster
 				return st, nil
 			}
 		}
@@ -137,7 +139,7 @@ func (e *kindEntry) reconcileEntity(ctx workflow.Context, ec *entdefine.Ctx[k8sS
 	}
 	actx := e.activityCtx(ctx)
 	spec := ec.Spec()
-	req := opRequest{Kubeconfig: spec.Kubeconfig, Manifest: spec.Manifest}
+	req := opRequest{Kubeconfig: spec.Kubeconfig, InCluster: spec.InCluster, Manifest: spec.Manifest}
 	var obs observation
 	if err := workflow.ExecuteActivity(actx, observeActivityName, req).Get(ctx, &obs); err != nil {
 		return err
@@ -171,7 +173,7 @@ func (e *kindEntry) finalizeEntity(ctx workflow.Context, st *k8sState) error {
 		return nil
 	}
 	actx := e.activityCtx(ctx)
-	req := opRequest{Kubeconfig: st.Kubeconfig, Manifest: st.Live}
+	req := opRequest{Kubeconfig: st.Kubeconfig, InCluster: st.InCluster, Manifest: st.Live}
 	if err := workflow.ExecuteActivity(actx, deleteActivityName, req).Get(ctx, nil); err != nil {
 		return err
 	}

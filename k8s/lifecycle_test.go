@@ -21,7 +21,9 @@ func TestEntityApplyHealFinalize(t *testing.T) {
 	require.NoError(t, entry.def.Register(env))
 	var mu sync.Mutex
 	exists, applies, deletes := false, 0, 0
-	env.RegisterActivityWithOptions(func(_ context.Context, _ opRequest) error {
+	env.RegisterActivityWithOptions(func(_ context.Context, req opRequest) error {
+		require.True(t, req.InCluster)
+		require.Empty(t, req.Kubeconfig.Name)
 		mu.Lock()
 		defer mu.Unlock()
 		exists = true
@@ -29,11 +31,15 @@ func TestEntityApplyHealFinalize(t *testing.T) {
 		return nil
 	}, activity.RegisterOptions{Name: applyActivityName})
 	env.RegisterActivityWithOptions(func(_ context.Context, req opRequest) (observation, error) {
+		require.True(t, req.InCluster)
+		require.Empty(t, req.Kubeconfig.Name)
 		mu.Lock()
 		defer mu.Unlock()
 		return observation{Exists: exists, Manifest: req.Manifest}, nil
 	}, activity.RegisterOptions{Name: observeActivityName})
-	env.RegisterActivityWithOptions(func(_ context.Context, _ opRequest) error {
+	env.RegisterActivityWithOptions(func(_ context.Context, req opRequest) error {
+		require.True(t, req.InCluster)
+		require.Empty(t, req.Kubeconfig.Name)
 		mu.Lock()
 		defer mu.Unlock()
 		exists = false
@@ -42,7 +48,7 @@ func TestEntityApplyHealFinalize(t *testing.T) {
 	}, activity.RegisterOptions{Name: deleteActivityName})
 	env.RegisterDelayedCallback(func() { mu.Lock(); exists = false; mu.Unlock() }, 1500*time.Millisecond)
 	env.RegisterDelayedCallback(func() { env.SignalWorkflow(entity.DeleteSignalName, nil) }, 4*time.Second)
-	env.ExecuteWorkflow("k8s..v1.ConfigMap", map[string]any{"spec": k8sSpec{Manifest: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "config"}}, Owner: "run/test"}})
+	env.ExecuteWorkflow("k8s..v1.ConfigMap", map[string]any{"spec": k8sSpec{InCluster: true, Manifest: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "config"}}, Owner: "run/test"}})
 	require.NoError(t, env.GetWorkflowError())
 	mu.Lock()
 	defer mu.Unlock()

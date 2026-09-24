@@ -16,6 +16,7 @@ import (
 // built from. It holds a reference, never the value — a pure spec
 // factory, safe in workflow code.
 type Client struct {
+	inCluster  bool
 	kubeconfig pipeline.SecretRef
 	scheme     *runtime.Scheme
 }
@@ -42,5 +43,14 @@ func NewClientFromSecret(kubeconfig pipeline.SecretRef, opts ...ClientOption) *C
 	for _, opt := range opts {
 		opt(c)
 	}
+	return c
+}
+
+// NewClientInCluster uses the run worker's projected service-account credentials.
+// The installation operator assigns the worker's ServiceAccount and RBAC. There
+// is no fallback from a missing/invalid kubeconfig to the installation identity.
+func NewClientInCluster(opts ...ClientOption) *Client {
+	c := NewClientFromSecret(pipeline.SecretRef{}, opts...)
+	c.inCluster = true
 	return c
 }
