@@ -63,10 +63,10 @@ github.com/google/go-containerregistry v0.21.9 h1:F+D4uZ3iA3DLMJLfhaqMdHJbzeqm/2
 github.com/google/go-containerregistry v0.21.9/go.mod h1:dP5XNKcL7kMFF/TB3LfvWmVhAcv7iqkHb3oDK8aauTo=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gopherex/schemapb/go v0.0.0-20260904155309-67a92c03b7e6 h1:oyKeKn5vdLuTODU9XX6m6n9cUXJnmKm1Tdf2/jPZoBg=
-github.com/gopherex/schemapb/go v0.0.0-20260904155309-67a92c03b7e6/go.mod h1:g9W8TC7ZZyPXKp+eQuPv612T2d0ZGs/Y+AIR2RA8KYw=
-github.com/graphene-ci/pipeline v0.2.0 h1:vMmtuJLL5/NNtgbloekzH6MxsBLbZPyDZDUZuMXpvPM=
-github.com/graphene-ci/pipeline v0.2.0/go.mod h1:qEhJWRQleFEn4Hsl3eajzOEgCQWjQVa2G+B9GXHB0LI=
+github.com/gopherex/schemapb/go v0.0.0-20260923103231-06c47e842fa3 h1:Zc4Gk38BYziZTC1p2afYZqwcG468zrlfDI8QFoMOhoU=
+github.com/gopherex/schemapb/go v0.0.0-20260923103231-06c47e842fa3/go.mod h1:g9W8TC7ZZyPXKp+eQuPv612T2d0ZGs/Y+AIR2RA8KYw=
+github.com/graphene-ci/pipeline v0.2.12 h1:ujFYs5PlpOqAUDyKEb7A3QTpIN3c6y4w4WOr3B7Zhho=
+github.com/graphene-ci/pipeline v0.2.12/go.mod h1:2YpDZtdO3LCkJ65oRzdAssnUO1mIewjMQoJ4auoYkko=
 github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb h1:P8lPqznDjPIz4hghg8aVb/9tMrfVJxb6nJhcFWneCII=
 github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb/go.mod h1:/dueP9d/i14iEJHNIjQVOYvbiRHZVXMmWUQYIYnBUd8=
 github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 h1:B+8ClL/kCQkRiU82d9xajRPKYMrB7E0MbtzWVi1K4ns=

@@ -104,7 +104,8 @@ func jobActivity(ctx context.Context, spec JobSpec) (JobReport, error) {
 	if err := cli.ContainerRemove(ctx, spec.Name, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		return JobReport{}, fmt.Errorf("job %s: remove stale container: %w", spec.Name, err)
 	}
-	created, err := cli.ContainerCreate(ctx, spec.Config, spec.hostConfig(), nil, nil, spec.Name)
+	host := spec.hostConfig()
+	created, err := cli.ContainerCreate(ctx, withTelemetry(spec.Config, host), host, nil, nil, spec.Name)
 	if err != nil {
 		if pullErr != nil {
 			return JobReport{}, fmt.Errorf("job %s: create: %w (pull %s: %w)", spec.Name, err, spec.Config.Image, pullErr)

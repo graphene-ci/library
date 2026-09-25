@@ -186,7 +186,7 @@ func runActivity(ctx context.Context, spec Spec) (Info, error) {
 		_, _ = io.Copy(io.Discard, pull)
 		_ = pull.Close()
 	} // a locally built image is fine — pull is best-effort
-	created, err := cli.ContainerCreate(ctx, spec.Config, spec.Host, nil, nil, spec.Name)
+	created, err := cli.ContainerCreate(ctx, withTelemetry(spec.Config, spec.Host), spec.Host, nil, nil, spec.Name)
 	if err != nil {
 		return Info{}, err
 	}
