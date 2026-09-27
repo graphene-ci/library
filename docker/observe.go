@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -151,7 +152,32 @@ func shipScrape(ctx context.Context, target string) {
 		obs.Warn(ctx, "scrape parse failed", obs.Str("target", target), obs.Str("error", err.Error()))
 		return
 	}
-	for name, fam := range families {
+	// Each sample is shipped as READ — its value at the scrape's moment,
+	// a counter as a counter — never re-exported: a series ends when its
+	// exporter does, and rate() sees the source's own clock.
+	if err := obs.Ship(ctx, scrapeSeries(families, time.Now())...); err != nil {
+		obs.Warn(ctx, "scrape export failed", obs.Str("target", target), obs.Str("error", err.Error()))
+	}
+}
+
+// scrapeSeries turns one exposition into series of readings taken at
+// `at`: counters stay counters, gauges and untyped values are gauges;
+// histograms and summaries need a shape of their own and are skipped.
+// Family order is fixed by name so two scrapes ship alike.
+func scrapeSeries(families map[string]*dto.MetricFamily, at time.Time) []obs.Series {
+	names := make([]string, 0, len(families))
+	for name := range families {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]obs.Series, 0, len(names))
+	for _, name := range names {
+		fam := families[name]
+		kind := obs.GaugeSeries
+		if fam.GetType() == dto.MetricType_COUNTER {
+			kind = obs.CounterSeries
+		}
+		series := obs.Series{Name: name, Kind: kind}
 		for _, m := range fam.GetMetric() {
 			v, ok := sampleValue(fam.GetType(), m)
 			if !ok {
@@ -161,9 +187,13 @@ func shipScrape(ctx context.Context, target string) {
 			for _, l := range m.GetLabel() {
 				attrs = append(attrs, obs.Str(l.GetName(), l.GetValue()))
 			}
-			obs.Gauge(ctx, name, v, attrs...)
+			series.Points = append(series.Points, obs.Sample{At: at, Value: v, Attrs: attrs})
+		}
+		if len(series.Points) > 0 {
+			out = append(out, series)
 		}
 	}
+	return out
 }
 
 // sampleValue extracts a single number from a metric family member —
@@ -222,17 +252,28 @@ func splitDockerStamp(line string) (int64, string) {
 	return 0, line
 }
 
-// shipStats renders one docker stats sample as metrics.
+// shipStats renders one docker stats sample as gauges of this beat's
+// moment: what the container uses NOW, not a distribution and not a
+// reading repeated until the next beat.
 func shipStats(ctx context.Context, body io.Reader) {
 	var s container.StatsResponse
 	if json.NewDecoder(body).Decode(&s) != nil {
 		return
 	}
+	if err := obs.Ship(ctx, statsSeries(s, time.Now())...); err != nil {
+		obs.Warn(ctx, "stats export failed", obs.Str("error", err.Error()))
+	}
+}
+
+// statsSeries is the beat's reading of a docker stats sample.
+func statsSeries(s container.StatsResponse, at time.Time) []obs.Series {
+	out := []obs.Series{{Name: "docker.container.memory.bytes", Kind: obs.GaugeSeries,
+		Points: []obs.Sample{{At: at, Value: float64(s.MemoryStats.Usage)}}}}
 	cpuDelta := float64(s.CPUStats.CPUUsage.TotalUsage - s.PreCPUStats.CPUUsage.TotalUsage)
 	sysDelta := float64(s.CPUStats.SystemUsage - s.PreCPUStats.SystemUsage)
 	if sysDelta > 0 && cpuDelta >= 0 {
-		obs.Measure(ctx, "docker.container.cpu.percent",
-			cpuDelta/sysDelta*float64(s.CPUStats.OnlineCPUs)*100)
+		out = append(out, obs.Series{Name: "docker.container.cpu.percent", Kind: obs.GaugeSeries,
+			Points: []obs.Sample{{At: at, Value: cpuDelta / sysDelta * float64(s.CPUStats.OnlineCPUs) * 100}}})
 	}
-	obs.Measure(ctx, "docker.container.memory.bytes", float64(s.MemoryStats.Usage))
+	return out
 }
