@@ -1,7 +1,9 @@
 package k8slib
 
 import (
+	"github.com/graphene-ci/library/k8s/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/obs"
+	"go.temporal.io/sdk/activity"
 
 	"context"
 	"fmt"
@@ -29,7 +31,38 @@ const (
 	applyActivityName   = "k8s.apply"
 	observeActivityName = "k8s.observe"
 	deleteActivityName  = "k8s.delete"
+	// conditionsActivityName reports what the controller says about an
+	// object while it converges.
+	conditionsActivityName = "k8s.conditions"
 )
+
+// conditionsNote is one change of an object's conditions.
+type conditionsNote struct {
+	Conditions []contract.Condition `json:"conditions"`
+}
+
+// conditionsActivity puts a change of the object's conditions where a
+// person looks: the record's logs (a warning when something is False,
+// with the controller's message) and its history (an event). Best
+// effort — the note must never fail convergence.
+func conditionsActivity(ctx context.Context, note conditionsNote) error {
+	ref := activity.GetInfo(ctx).WorkflowExecution.ID
+	ctx = obs.WithEntity(ctx, ref)
+	summary := contract.Summary(note.Conditions)
+	failing := false
+	for _, c := range note.Conditions {
+		if c.Status == "False" && (c.Message != "" || c.Reason != "") {
+			failing = true
+		}
+	}
+	if failing {
+		obs.Warn(ctx, "controller reports: "+summary)
+	} else {
+		obs.Info(ctx, "conditions: "+summary)
+	}
+	_ = obs.Event(ctx, "conditions", note.Conditions)
+	return nil
+}
 
 // opRequest travels to every ops activity: which cluster (by secret
 // NAME) and which object.

@@ -1,6 +1,10 @@
 package k8stest_test
 
 import (
+	"errors"
+	"fmt"
+	"github.com/graphene-ci/pipeline/pkg/id"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,4 +115,61 @@ func TestSetDefaultAnswersUnnamedObjects(t *testing.T) {
 	require.Equal(t, []string{"named", "default"}, got)
 	require.Equal(t, []string{"k8s..v1.ConfigMap/unnamed"}, seen, "the default is asked only for objects without a fixture")
 	w.AssertNoLeaks(t)
+}
+
+// A cloud's refusal reaches the failure: the last observed conditions are
+// in the timeout's text, and WithFailed ends the declaration at once with
+// the hook's own error — no timeout waited out.
+func TestFailureCarriesTheControllersReason(t *testing.T) {
+	quota := map[string]any{"status": map[string]any{"conditions": []any{
+		map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "Quota limit compute.ssdDisks.size exceeded"},
+		map[string]any{"type": "Ready", "status": "False", "reason": "Creating"},
+	}}}
+	for _, tc := range []struct {
+		name   string
+		failed bool
+		want   []string
+	}{
+		{"timeout", false, []string{"did not become ready within 3s", "Synced=False (ReconcileError: Quota limit compute.ssdDisks.size exceeded)", "Ready=False (Creating)"}},
+		{"failed hook", true, []string{"failed: quota exceeded", "Quota limit compute.ssdDisks.size exceeded"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var suite testsuite.WorkflowTestSuite
+			w := pipelinetest.Install(t, suite.NewTestWorkflowEnvironment())
+			objects := k8stest.Install(w)
+			require.NoError(t, objects.Set("k8s..v1.ConfigMap/config", quota))
+			wf := pipelinetest.Workflow(w, id.PipelineId("refused-"+strings.ReplaceAll(tc.name, " ", "-")), func(ctx pipeline.Context, _ struct{}) (string, error) {
+				client := k8slib.NewClientFromSecret(pipeline.UseSecret("cluster"))
+				object := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}}
+				opts := []k8slib.Option[unstructured.Unstructured]{
+					k8slib.WithPollInterval[unstructured.Unstructured](time.Second),
+					k8slib.WithTimeout[unstructured.Unstructured](3 * time.Second),
+					k8slib.WithReady(func(_ *unstructured.Unstructured) bool { return false }),
+				}
+				if tc.failed {
+					opts = append(opts, k8slib.WithFailed(func(live *unstructured.Unstructured) error {
+						conds, _, _ := unstructured.NestedSlice(live.Object, "status", "conditions")
+						for _, c := range conds {
+							if m := c.(map[string]any); strings.Contains(fmt.Sprint(m["message"]), "Quota") {
+								return errors.New("quota exceeded")
+							}
+						}
+						return nil
+					}))
+				}
+				_ = k8slib.Resource(ctx, client, "config", object, opts...).Ready(ctx)
+				return "", nil
+			})
+			started := w.Env.Now()
+			w.Env.ExecuteWorkflow(wf, struct{}{})
+			err := w.Env.GetWorkflowError()
+			require.Error(t, err)
+			for _, want := range tc.want {
+				require.ErrorContains(t, err, want)
+			}
+			if tc.failed {
+				require.Less(t, w.Env.Now().Sub(started), 3*time.Second, "a broken object fails at once")
+			}
+		})
+	}
 }

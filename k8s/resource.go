@@ -3,6 +3,7 @@ package k8slib
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,6 +32,7 @@ type Option[T any] func(*conf[T])
 
 type conf[T any] struct {
 	ready          func(live *T) bool
+	failed         func(live *T) error
 	drifted        func(desired, live *T) bool
 	validate       func(desired *T) error
 	reconcileEvery time.Duration
@@ -44,6 +46,25 @@ type conf[T any] struct {
 // object.
 func WithReady[T any](fn func(live *T) bool) Option[T] {
 	return func(c *conf[T]) { c.ready = fn }
+}
+
+// WithFailed says when the object is broken for good: called on every
+// observation while the object converges, a non-nil error ends the
+// declaration at once — no waiting out the timeout, no retry — with the
+// error and the last observed conditions as its reason. A cloud that
+// refuses for quota or permission will not change its mind in twenty
+// minutes:
+//
+//	k8slib.WithFailed(func(live *Instance) error {
+//		for _, c := range live.Status.Conditions {
+//			if c.Type == "Synced" && c.Status == "False" && strings.Contains(c.Message, "Quota") {
+//				return errors.New(c.Message)
+//			}
+//		}
+//		return nil
+//	})
+func WithFailed[T any](fn func(live *T) error) Option[T] {
+	return func(c *conf[T]) { c.failed = fn }
 }
 
 // WithDrifted adds drift knowledge: the reconcile tick re-applies when
@@ -191,6 +212,16 @@ func ensureKindRecorded[T any](ctx pipeline.Context, kindKey string, cfg conf[T]
 			return ready(t), nil
 		}
 	}
+	if cfg.failed != nil {
+		failed := cfg.failed
+		untyped.failed = func(live map[string]any) error {
+			t, err := decodeInto[T](live)
+			if err != nil {
+				return err
+			}
+			return failed(t)
+		}
+	}
 	if cfg.drifted != nil {
 		drifted := cfg.drifted
 		untyped.drifted = func(desired, live map[string]any) (bool, error) {
@@ -208,11 +239,12 @@ func ensureKindRecorded[T any](ctx pipeline.Context, kindKey string, cfg conf[T]
 	e := newKind(kindKey, untyped)
 	registry[kindKey] = e
 	knowledge := ctx.RecordValue(contract.RegistrationKey, func() any { return map[string]contract.Knowledge{} }).(map[string]contract.Knowledge)
-	knowledge[kindKey] = contract.Knowledge{Ready: e.cfg.ready, Timeout: e.cfg.timeout, PollInterval: e.cfg.pollInterval}
+	knowledge[kindKey] = contract.Knowledge{Ready: e.cfg.ready, Failed: e.cfg.failed, Timeout: e.cfg.timeout, PollInterval: e.cfg.pollInterval}
 
 	ctx.RecordActivity(applyActivityName, applyActivity)
 	ctx.RecordActivity(observeActivityName, observeActivity)
 	ctx.RecordActivity(deleteActivityName, deleteActivity)
+	ctx.RecordActivity(conditionsActivityName, conditionsActivity)
 	ctx.RecordWorker(func(w worker.Worker, _ client.Client) error {
 		return e.def.Register(w)
 	})
@@ -268,7 +300,16 @@ func makeDeclare(cl client.Client, registry map[string]*kindEntry) func(context.
 			case entity.PhaseReady:
 				return out.State, nil
 			case entity.PhaseCreateFailed:
-				return k8sState{}, fmt.Errorf("%s/%s failed to converge", req.Kind, req.Name)
+				// Final: the entity has closed with its reason — the
+				// conditions the cloud reported. Declaring again would
+				// create the object anew and wait the same timeout out
+				// for the same refusal, forever.
+				reason := "failed to converge"
+				if werr := cl.GetWorkflow(ctx, req.Kind+"/"+req.Name, "").Get(ctx, nil); werr != nil {
+					reason = rootMessage(werr)
+				}
+				return k8sState{}, temporal.NewNonRetryableApplicationError(
+					fmt.Sprintf("%s/%s: %s", req.Kind, req.Name, reason), "k8s.create-failed", nil)
 			case entity.PhaseDeleting, entity.PhaseDeleted, entity.PhaseDeleteFailed:
 				return k8sState{}, fmt.Errorf("%s/%s is going away (phase %s)", req.Kind, req.Name, out.Phase)
 			case entity.PhaseCreating:
@@ -282,6 +323,19 @@ func makeDeclare(cl client.Client, registry map[string]*kindEntry) func(context.
 			}
 		}
 	}
+}
+
+// rootMessage is the innermost message of a workflow's failure chain:
+// the init's own words, without the SDK's wrappers around them.
+func rootMessage(err error) string {
+	msg := err.Error()
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		var app *temporal.ApplicationError
+		if errors.As(e, &app) {
+			msg = app.Message()
+		}
+	}
+	return msg
 }
 
 // manifestOf flattens the typed object into a manifest, deriving

@@ -6,6 +6,7 @@ package k8stest
 import (
 	"encoding/json"
 	"fmt"
+	"go.temporal.io/sdk/temporal"
 	"sync"
 	"time"
 
@@ -107,6 +108,7 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 		return nil, err
 	}
 	deadline := workflow.Now(ctx).Add(knowledge.Timeout)
+	var last []contract.Condition
 	for {
 		if err := o.world.Failure(name); err != nil {
 			return nil, err
@@ -117,6 +119,13 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 		}
 		if exists {
 			live := overlay(req.Spec.Manifest, observed)
+			last = contract.ConditionsOf(live)
+			if knowledge.Failed != nil {
+				if ferr := knowledge.Failed(live); ferr != nil {
+					return nil, temporal.NewNonRetryableApplicationError(
+						fmt.Sprintf("%s: %s", name, contract.Explain("failed: "+ferr.Error(), last)), "k8s.create-failed", nil)
+				}
+			}
 			ready, err := knowledge.Ready(live)
 			if err != nil {
 				return nil, err
@@ -128,7 +137,9 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 		}
 		remaining := deadline.Sub(workflow.Now(ctx))
 		if remaining <= 0 {
-			return nil, fmt.Errorf("%s did not become ready within %s (supply a live fixture satisfying WithReady)", name, knowledge.Timeout)
+			return nil, temporal.NewNonRetryableApplicationError(contract.Explain(
+				fmt.Sprintf("%s did not become ready within %s (supply a live fixture satisfying WithReady)", name, knowledge.Timeout), last),
+				"k8s.create-failed", nil)
 		}
 		if err := workflow.Sleep(ctx, min(knowledge.PollInterval, remaining)); err != nil {
 			return nil, err

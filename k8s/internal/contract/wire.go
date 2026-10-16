@@ -28,6 +28,10 @@ type State struct {
 	Drifted    bool               `json:"drifted,omitempty"`
 	InCluster  bool               `json:"in_cluster,omitempty"`
 	Kubeconfig pipeline.SecretRef `json:"kubeconfig"`
+	// Conditions are the last observed status.conditions — what the
+	// controller (a cloud provider) says about the object, kept for the
+	// failure that may follow.
+	Conditions []Condition `json:"conditions,omitempty"`
 	// Owned is the tree half: current owner, transfer command, the
 	// EntityOwner/KeepUntil mirrors.
 	ownership.State

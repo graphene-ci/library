@@ -28,6 +28,7 @@ type k8sState = contract.State
 // kindConfig is the per-kind knowledge, wrapped untyped.
 type kindConfig struct {
 	ready          func(live map[string]any) (bool, error)
+	failed         func(live map[string]any) error
 	drifted        func(desired, live map[string]any) (bool, error)
 	reconcileEvery time.Duration
 	pollInterval   time.Duration
@@ -73,6 +74,24 @@ func newKind(key string, cfg kindConfig) *kindEntry {
 	return e
 }
 
+// initAttempts bounds an ops activity during convergence: a cluster that
+// refuses apply or observe ten times in a row (~8 minutes of backoff) is
+// a failure of the declaration, not a reason to wait forever.
+const initAttempts = 10
+
+// initCtx is activityCtx with the convergence bound.
+func (e *kindEntry) initCtx(ctx workflow.Context) workflow.Context {
+	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    time.Minute,
+			MaximumAttempts:    initAttempts,
+		},
+	})
+}
+
 func (e *kindEntry) activityCtx(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
@@ -99,18 +118,33 @@ func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, er
 	st.Kubeconfig = spec.Kubeconfig
 	st.InCluster = spec.InCluster
 	st.Live = spec.Manifest
-	actx := e.activityCtx(ctx)
+	actx := e.initCtx(ctx)
 	req := opRequest{Kubeconfig: spec.Kubeconfig, InCluster: spec.InCluster, Manifest: spec.Manifest}
 	if err := workflow.ExecuteActivity(actx, applyActivityName, req).Get(ctx, nil); err != nil {
 		return st, fmt.Errorf("apply: %w", err)
 	}
 	deadline := workflow.Now(ctx).Add(e.cfg.timeout)
+	reported := ""
 	for {
 		var obs observation
 		if err := workflow.ExecuteActivity(actx, observeActivityName, req).Get(ctx, &obs); err != nil {
-			return st, fmt.Errorf("observe: %w", err)
+			return st, fmt.Errorf("observe: %s", contract.Explain(err.Error(), st.Conditions))
 		}
 		if obs.Exists {
+			st.Conditions = contract.ConditionsOf(obs.Manifest)
+			// What the controller says while the object converges is the
+			// record's news NOW — "the cloud refuses: quota exceeded" —
+			// not a line in the timeout twenty minutes later.
+			if summary := contract.Summary(st.Conditions); summary != reported {
+				reported = summary
+				_ = workflow.ExecuteActivity(actx, conditionsActivityName, conditionsNote{Conditions: st.Conditions}).Get(ctx, nil)
+			}
+			if e.cfg.failed != nil {
+				if err := e.cfg.failed(obs.Manifest); err != nil {
+					return st, temporal.NewNonRetryableApplicationError(
+						contract.Explain("failed: "+err.Error(), st.Conditions), "k8s.failed", nil)
+				}
+			}
 			ready, err := e.cfg.ready(obs.Manifest)
 			if err != nil {
 				return st, fmt.Errorf("ready check: %w", err)
@@ -123,7 +157,8 @@ func (e *kindEntry) initEntity(ctx workflow.Context, spec k8sSpec) (k8sState, er
 			}
 		}
 		if !workflow.Now(ctx).Before(deadline) {
-			return st, fmt.Errorf("did not become ready within %s", e.cfg.timeout)
+			return st, temporal.NewNonRetryableApplicationError(
+				contract.Explain(fmt.Sprintf("did not become ready within %s", e.cfg.timeout), st.Conditions), "k8s.timeout", nil)
 		}
 		if err := workflow.Sleep(ctx, e.cfg.pollInterval); err != nil {
 			return st, err
