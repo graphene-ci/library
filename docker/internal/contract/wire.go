@@ -3,6 +3,8 @@ package contract
 
 import (
 	"encoding/json"
+	"time"
+
 	"github.com/docker/docker/api/types/container"
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
 	"github.com/graphene-ci/pipeline/pkg/ref"
@@ -22,9 +24,10 @@ type ContainerSpec struct {
 	// carried into the record's state for the topology view.
 	Flows []ownership.Flow `json:"flows,omitempty"`
 	// Scrape is a prometheus metrics endpoint the container exposes; the
-	// observation beat pulls it and ships the samples as the container's
-	// own metrics (Р-Н27). Empty disables scraping.
-	Scrape string `json:"scrape,omitempty"`
+	// executor pulls it every ScrapeEvery and ships the samples as the
+	// container's own metrics (Р-Н27). Empty disables scraping.
+	Scrape      string        `json:"scrape,omitempty"`
+	ScrapeEvery time.Duration `json:"scrapeEvery,omitempty"`
 }
 
 // DeclareRequest starts or attaches to a Docker resource.

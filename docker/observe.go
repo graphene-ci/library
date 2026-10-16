@@ -14,16 +14,11 @@ import (
 	"fmt"
 	cerrdefs "github.com/containerd/errdefs"
 	"io"
-	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
-	"github.com/prometheus/common/model"
 
 	"github.com/graphene-ci/pipeline/pkg/obs"
 )
@@ -43,8 +38,10 @@ type observeRequest struct {
 	// PrevStatus is what the record believed; a transition is worth a
 	// louder line than a sample.
 	PrevStatus string `json:"prevStatus,omitempty"`
-	// Scrape is the container's prometheus endpoint, pulled each beat.
-	Scrape string `json:"scrape,omitempty"`
+	// Scrape is the container's prometheus endpoint; the scraper pulls it
+	// every ScrapeEvery, apart from the beat.
+	Scrape      string        `json:"scrape,omitempty"`
+	ScrapeEvery time.Duration `json:"scrapeEvery,omitempty"`
 	// Entity is this record's reference ("docker/<name>"); the beat stamps
 	// every sample, log and scraped metric with it, so `metrics docker
 	// <name>` (and logs/events) find them under the record — not only
@@ -81,6 +78,7 @@ func observeActivity(ctx context.Context, req observeRequest) (observeResult, er
 	insp, err := cli.ContainerInspect(ctx, req.Id)
 	if err != nil {
 		// The container is gone: that IS the observation.
+		scrapes.release(ctx, req.Id)
 		obs.Warn(ctx, "container is gone", obs.Str("container", req.Id))
 		res.Status = "gone"
 		return res, nil
@@ -100,24 +98,25 @@ func observeActivity(ctx context.Context, req observeRequest) (observeResult, er
 		reportTransition(ctx, req.Id, reported, res.Status, insp.State.ExitCode)
 	}
 
-	// One stats sample — the metric dimension of a running container.
+	// One stats sample — the metric dimension of a running container. Its
+	// application metrics are the scraper's, at their own step: the beat
+	// only makes sure a running container IS scraped (after an executor
+	// restart nobody scrapes it until someone says so) and that a stopped
+	// one is not pulled in vain.
 	if insp.State.Running {
-		sample(ctx, cli, req.Id, req.Scrape)
+		shipStatsOf(ctx, cli, req.Id)
+		scrapes.watch(req.Id, req.Entity, req.Scrape, req.ScrapeEvery)
+	} else {
+		scrapes.release(ctx, req.Id)
 	}
 	return res, nil
 }
 
-// sample ships one stats reading and the container's own application
-// metrics: pull its prometheus endpoint and ship every sample under this
-// record's reference — no token and no sidecar collector (R-N27:
-// telemetry flows through the executor).
-func sample(ctx context.Context, cli *dockerclient.Client, id, scrape string) {
+// shipStatsOf ships one docker stats reading of a container.
+func shipStatsOf(ctx context.Context, cli *dockerclient.Client, id string) {
 	if stats, serr := cli.ContainerStatsOneShot(ctx, id); serr == nil {
 		shipStats(ctx, stats.Body)
 		_ = stats.Body.Close()
-	}
-	if scrape != "" {
-		shipScrape(ctx, scrape)
 	}
 }
 
@@ -145,10 +144,12 @@ const (
 	drainTimeout = (stopGrace + 10) * time.Second
 )
 
-// followActivity starts following a container's log from a cursor. It
-// returns at once; the follower streams from then on.
+// followActivity starts following a container's log from a cursor and
+// scraping its endpoint. It returns at once; the follower and the scraper
+// stream from then on.
 func followActivity(_ context.Context, req observeRequest) error {
 	logs.watch(req.Id, req.Entity, req.SinceUnixNano, "running")
+	scrapes.watch(req.Id, req.Entity, req.Scrape, req.ScrapeEvery)
 	return nil
 }
 
@@ -164,6 +165,7 @@ func drainActivity(ctx context.Context, req observeRequest) error {
 	if req.Entity != "" {
 		ctx = obs.WithEntity(ctx, req.Entity)
 	}
+	scrapes.release(ctx, req.Id)
 	t := logs.release(ctx, req.Id)
 	if t == nil {
 		// Not followed (an executor that restarted and never beat since):
@@ -179,7 +181,8 @@ func drainActivity(ctx context.Context, req observeRequest) error {
 		if t.status == "" {
 			t.status = insp.State.Status
 		}
-		sample(ctx, cli, req.Id, req.Scrape)
+		shipStatsOf(ctx, cli, req.Id)
+		scrapeOnce(ctx, req.Scrape)
 		grace := stopGrace
 		if serr := cli.ContainerStop(ctx, req.Id, container.StopOptions{Timeout: &grace}); serr != nil && !cerrdefs.IsNotFound(serr) {
 			obs.Warn(ctx, "container stop failed: "+serr.Error(), obs.Str("container", req.Id))
@@ -192,95 +195,6 @@ func drainActivity(ctx context.Context, req observeRequest) error {
 		obs.Warn(ctx, "last log lines not read: "+err.Error(), obs.Str("container", req.Id))
 	}
 	return nil
-}
-
-// shipScrape pulls a prometheus endpoint and emits each sample as a
-// gauge under the record's reference. Best effort: a scrape failure is
-// a warning, never fatal to the beat.
-func shipScrape(ctx context.Context, target string) {
-	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(hctx, http.MethodGet, target, nil)
-	if err != nil {
-		obs.Warn(ctx, "scrape target invalid", obs.Str("target", target))
-		return
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		obs.Warn(ctx, "scrape failed", obs.Str("target", target), obs.Str("error", err.Error()))
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		obs.Warn(ctx, "scrape non-200", obs.Str("target", target), obs.Str("status", resp.Status))
-		return
-	}
-	parser := expfmt.NewTextParser(model.UTF8Validation)
-	families, err := parser.TextToMetricFamilies(resp.Body)
-	if err != nil {
-		obs.Warn(ctx, "scrape parse failed", obs.Str("target", target), obs.Str("error", err.Error()))
-		return
-	}
-	// Each sample is shipped as READ — its value at the scrape's moment,
-	// a counter as a counter — never re-exported: a series ends when its
-	// exporter does, and rate() sees the source's own clock.
-	if err := obs.Ship(ctx, scrapeSeries(families, time.Now())...); err != nil {
-		obs.Warn(ctx, "scrape export failed", obs.Str("target", target), obs.Str("error", err.Error()))
-	}
-}
-
-// scrapeSeries turns one exposition into series of readings taken at
-// `at`: counters stay counters, gauges and untyped values are gauges;
-// histograms and summaries need a shape of their own and are skipped.
-// Family order is fixed by name so two scrapes ship alike.
-func scrapeSeries(families map[string]*dto.MetricFamily, at time.Time) []obs.Series {
-	names := make([]string, 0, len(families))
-	for name := range families {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	out := make([]obs.Series, 0, len(names))
-	for _, name := range names {
-		fam := families[name]
-		kind := obs.GaugeSeries
-		if fam.GetType() == dto.MetricType_COUNTER {
-			kind = obs.CounterSeries
-		}
-		series := obs.Series{Name: name, Kind: kind}
-		for _, m := range fam.GetMetric() {
-			v, ok := sampleValue(fam.GetType(), m)
-			if !ok {
-				continue
-			}
-			attrs := make([]obs.KV, 0, len(m.GetLabel()))
-			for _, l := range m.GetLabel() {
-				attrs = append(attrs, obs.Str(l.GetName(), l.GetValue()))
-			}
-			series.Points = append(series.Points, obs.Sample{At: at, Value: v, Attrs: attrs})
-		}
-		if len(series.Points) > 0 {
-			out = append(out, series)
-		}
-	}
-	return out
-}
-
-// sampleValue extracts a single number from a metric family member —
-// gauge/counter/untyped directly, others skipped (histograms/summaries
-// need their own shape, out of scope for the beat).
-func sampleValue(t dto.MetricType, m *dto.Metric) (float64, bool) {
-	switch t {
-	case dto.MetricType_GAUGE:
-		return m.GetGauge().GetValue(), true
-	case dto.MetricType_COUNTER:
-		return m.GetCounter().GetValue(), true
-	case dto.MetricType_UNTYPED:
-		return m.GetUntyped().GetValue(), true
-	case dto.MetricType_SUMMARY, dto.MetricType_HISTOGRAM, dto.MetricType_GAUGE_HISTOGRAM:
-		return 0, false
-	default:
-		return 0, false
-	}
 }
 
 // splitDockerStamp cuts docker's RFC3339Nano prefix off a log line.

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -122,9 +123,13 @@ type Spec struct {
 	Config *container.Config     `json:"config"`
 	Host   *container.HostConfig `json:"host,omitempty"`
 	// Scrape is a prometheus metrics endpoint the container exposes
-	// (e.g. "http://localhost:9187/metrics"); the observation beat pulls
-	// it and ships the samples as this container's own metrics (Р-Н27).
+	// (e.g. "http://localhost:9187/metrics"); the executor pulls it and
+	// ships the samples — histograms and summaries included — as this
+	// container's own metrics (Р-Н27).
 	Scrape string `json:"scrape,omitempty"`
+	// ScrapeEvery is the scrape step: 15s when zero, never under 1s. It
+	// is the scrape's own and does not move the stats beat.
+	ScrapeEvery time.Duration `json:"scrapeEvery,omitempty"`
 }
 
 // Info is the output of a running container resource.
@@ -157,7 +162,7 @@ func Container(ctx pipeline.Context, agent pipeline.Agent, spec Spec, opts ...pi
 	}
 	o := pipeline.BuildResourceOptions(ctx, opts)
 	pipeline.AdoptChildren(ctx, self, o.Children)
-	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent, Flows: o.Flows, Scrape: spec.Scrape})
+	raw, _ := json.Marshal(containerSpec{Name: spec.Name, Config: spec.Config, Host: spec.Host, Owner: o.Parent, Flows: o.Flows, Scrape: spec.Scrape, ScrapeEvery: spec.ScrapeEvery})
 	fut := pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), declareActivityName, declareRequest{
 		Kind: ContainerKind, Name: spec.Name, Labels: o.Labels, RunId: string(ctx.RunId()), Spec: raw,
 	})

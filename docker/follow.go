@@ -92,7 +92,7 @@ var logs = newFollower(func() (daemon, error) {
 	return dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 })
 
-var startLogs sync.Once
+var startObservers sync.Once
 
 // run owns every tail goroutine: started once from the worker's
 // construction, it lives as long as the process.

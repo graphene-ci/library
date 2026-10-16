@@ -54,8 +54,10 @@ type containerState struct {
 	Status string `json:"status,omitempty"`
 	// ObservedUnixNano is the log window's low edge.
 	ObservedUnixNano int64 `json:"observedUnixNano,omitempty"`
-	// Scrape mirrors the spec's metrics endpoint for the beat.
-	Scrape string `json:"scrape,omitempty"`
+	// Scrape and ScrapeEvery mirror the spec's metrics endpoint and step
+	// for the scraper.
+	Scrape      string        `json:"scrape,omitempty"`
+	ScrapeEvery time.Duration `json:"scrapeEvery,omitempty"`
 	ownership.State
 }
 
@@ -137,7 +139,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			if spec.Owner != "" {
 				ownership.Init(ctx, &st.State, spec.Owner)
 			}
-			st.Scrape = spec.Scrape
+			st.Scrape, st.ScrapeEvery = spec.Scrape, spec.ScrapeEvery
 			st.Name = spec.Name // recorded BEFORE create, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
 				Spec{Name: spec.Name, Config: spec.Config, Host: spec.Host}).Get(ctx, &st.Info)
@@ -145,9 +147,11 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 				return st, err
 			}
 			// From its first line: the executor follows the container's
-			// log as a stream, not at the next beat.
+			// log as a stream and scrapes its metrics at their own step,
+			// not at the next beat.
 			_ = workflow.ExecuteActivity(entityActivityCtx(ctx), followActivityName, observeRequest{
 				Id: st.Info.Id, Entity: workflow.GetInfo(ctx).WorkflowExecution.ID,
+				Scrape: st.Scrape, ScrapeEvery: st.ScrapeEvery,
 			}).Get(ctx, nil)
 			st.Status = "running"
 			return st, nil
@@ -197,7 +201,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			}
 			var res observeResult
 			if err := workflow.ExecuteActivity(entityActivityCtx(ctx), observeActivityName, observeRequest{
-				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status, Scrape: st.Scrape,
+				Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, PrevStatus: st.Status, Scrape: st.Scrape, ScrapeEvery: st.ScrapeEvery,
 				Entity: workflow.GetInfo(ctx).WorkflowExecution.ID,
 			}).Get(ctx, &res); err != nil {
 				return nil //nolint:nilerr // observation must never kill the record
@@ -315,8 +319,12 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 	ctx.RecordActivity(networkRemoveActivityName, networkRemoveActivity)
 	declared := definitions{container: containerDef(), volume: volumeDef(), network: networkDef()}
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
-		// The log follower of this process, started with its worker.
-		startLogs.Do(func() { go logs.run() })
+		// The log follower and the metrics scraper of this process,
+		// started with its worker.
+		startObservers.Do(func() {
+			go logs.run()
+			go scrapes.run()
+		})
 		if err := declared.container.Register(w); err != nil {
 			return err
 		}
