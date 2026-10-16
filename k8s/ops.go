@@ -39,6 +39,10 @@ const (
 // conditionsNote is one change of an object's conditions.
 type conditionsNote struct {
 	Conditions []contract.Condition `json:"conditions"`
+	// Note, when set, is news of the object itself rather than of its
+	// conditions — a failed declaration that could not take it out of
+	// the cluster — said as a warning with the conditions as context.
+	Note string `json:"note,omitempty"`
 }
 
 // conditionsActivity puts a change of the object's conditions where a
@@ -49,6 +53,11 @@ func conditionsActivity(ctx context.Context, note conditionsNote) error {
 	ref := activity.GetInfo(ctx).WorkflowExecution.ID
 	ctx = obs.WithEntity(ctx, ref)
 	summary := contract.Summary(note.Conditions)
+	if note.Note != "" {
+		obs.Warn(ctx, note.Note, obs.Str("conditions", summary))
+		_ = obs.Event(ctx, "orphaned", map[string]string{"note": note.Note, "conditions": summary})
+		return nil
+	}
 	failing := false
 	for _, c := range note.Conditions {
 		if c.Status == "False" && (c.Message != "" || c.Reason != "") {

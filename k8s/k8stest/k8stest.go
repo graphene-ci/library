@@ -122,8 +122,8 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 			last = contract.ConditionsOf(live)
 			if knowledge.Failed != nil {
 				if ferr := knowledge.Failed(live); ferr != nil {
-					return nil, temporal.NewNonRetryableApplicationError(
-						fmt.Sprintf("%s: %s", name, contract.Explain("failed: "+ferr.Error(), last)), "k8s.create-failed", nil)
+					return nil, o.fail(name, temporal.NewNonRetryableApplicationError(
+						fmt.Sprintf("%s: %s", name, contract.Explain("failed: "+ferr.Error(), last)), "k8s.create-failed", nil))
 				}
 			}
 			ready, err := knowledge.Ready(live)
@@ -137,14 +137,25 @@ func (o *Objects) declare(ctx workflow.Context, req contract.DeclareRequest) (an
 		}
 		remaining := deadline.Sub(workflow.Now(ctx))
 		if remaining <= 0 {
-			return nil, temporal.NewNonRetryableApplicationError(contract.Explain(
+			return nil, o.fail(name, temporal.NewNonRetryableApplicationError(contract.Explain(
 				fmt.Sprintf("%s did not become ready within %s (supply a live fixture satisfying WithReady)", name, knowledge.Timeout), last),
-				"k8s.create-failed", nil)
+				"k8s.create-failed", nil))
 		}
 		if err := workflow.Sleep(ctx, min(knowledge.PollInterval, remaining)); err != nil {
 			return nil, err
 		}
 	}
+}
+
+// fail closes a declaration as the server's record does: the record is
+// failed — its object withdrawn from the cluster — and stays in the tree
+// so whatever it owns is still torn down with the run.
+func (o *Objects) fail(name ref.OwnerRef, err error) error {
+	o.mu.Lock()
+	delete(o.live, name)
+	o.mu.Unlock()
+	o.world.FailResource(name, err)
+	return err
 }
 
 // overlay copies both sides through JSON before merging. Neither the recorded

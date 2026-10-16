@@ -12,6 +12,7 @@ import (
 	"github.com/graphene-ci/library/k8s/k8stest"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/pipelinetest"
+	"github.com/graphene-ci/pipeline/pkg/ref"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -172,4 +173,49 @@ func TestFailureCarriesTheControllersReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A network the cloud refuses, with a subnet already declared under it
+// and ready: the failed root still takes its children down with the run
+// — nothing it owned is left running.
+func TestFailedParentStillTearsDownItsChildren(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	w := pipelinetest.Install(t, suite.NewTestWorkflowEnvironment())
+	objects := k8stest.Install(w)
+	quota := map[string]any{"status": map[string]any{"conditions": []any{
+		map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "Quota limit vpc.networks.count exceeded"},
+	}}}
+	require.NoError(t, objects.Set("k8s..v1.ConfigMap/net", quota))
+	require.NoError(t, objects.Set("k8s..v1.Secret/subnet", map[string]any{"status": map[string]any{"phase": "ready"}}))
+	wf := pipelinetest.Workflow(w, "refused-root", func(ctx pipeline.Context, _ struct{}) (string, error) {
+		client := k8slib.NewClientFromSecret(pipeline.UseSecret("cluster"))
+		net := k8slib.Resource(ctx, client, "net", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}},
+			k8slib.WithPollInterval[unstructured.Unstructured](time.Second),
+			k8slib.WithReady(func(*unstructured.Unstructured) bool { return false }),
+			k8slib.WithFailed(func(live *unstructured.Unstructured) error {
+				if strings.Contains(fmt.Sprint(live.Object["status"]), "Quota") {
+					return errors.New("quota exceeded")
+				}
+				return nil
+			}))
+		subnet := k8slib.Resource(ctx, client, "subnet", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret"}},
+			k8slib.WithPollInterval[unstructured.Unstructured](time.Second),
+			k8slib.WithReady(func(live *unstructured.Unstructured) bool {
+				phase, _, _ := unstructured.NestedString(live.Object, "status", "phase")
+				return phase == "ready"
+			}),
+			k8slib.WithResourceOption[unstructured.Unstructured](pipeline.Parent(net)))
+		subnet.Ready(ctx)
+		net.Ready(ctx)
+		return "", nil
+	})
+	w.Env.ExecuteWorkflow(wf, struct{}{})
+	require.ErrorContains(t, w.Env.GetWorkflowError(), "quota exceeded")
+	subnet, ok := w.Resource("k8s..v1.Secret/subnet")
+	require.True(t, ok)
+	require.Equal(t, "deleted", subnet.Phase, "the failed root's child is torn down with the run")
+	require.Equal(t, ref.OwnerRef("k8s..v1.ConfigMap/net"), subnet.Owner)
+	net, _ := w.Resource("k8s..v1.ConfigMap/net")
+	require.Equal(t, "deleted", net.Phase)
+	w.AssertNoLeaks(t)
 }
