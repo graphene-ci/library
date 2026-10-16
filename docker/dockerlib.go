@@ -209,12 +209,24 @@ func removeActivity(ctx context.Context, containerRef string) error {
 		return err
 	}
 	defer func() { _ = cli.Close() }()
+	// Stop before removing: SIGTERM and a grace period let the process
+	// flush what it buffers — an OpenTelemetry SDK's last spans, metrics
+	// and logs, a database's last log lines. A forced remove is SIGKILL,
+	// and the buffer died with the process.
+	grace := stopGrace
+	if err := cli.ContainerStop(ctx, containerRef, container.StopOptions{Timeout: &grace}); err != nil && !cerrdefs.IsNotFound(err) {
+		obs.Warn(ctx, "container stop failed; removing it by force", obs.Str("container", containerRef), obs.Str("error", err.Error()))
+	}
 	err = cli.ContainerRemove(ctx, containerRef, container.RemoveOptions{Force: true})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	return nil
 }
+
+// stopGrace is how long a container has to exit on SIGTERM before the
+// daemon kills it.
+const stopGrace = 10
 
 // dockerVersion asks the daemon over the API — no CLI involved, works
 // in both runtimes (the agent points DOCKER_HOST at the machine's

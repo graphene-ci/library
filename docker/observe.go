@@ -9,18 +9,18 @@ package dockerlib
 // THIS container's output — end to end, zero code per call site.
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	cerrdefs "github.com/containerd/errdefs"
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -59,7 +59,11 @@ type observeResult struct {
 	LastLogUnixNano int64 `json:"lastLogUnixNano"`
 }
 
-// observeActivity ships one beat of the container's own telemetry.
+// observeActivity ships one beat of the container's own telemetry: a
+// stats sample, a scrape, a status transition. The log is the follower's
+// — the beat makes sure the container IS followed (after an executor
+// restart nobody follows it until someone says so) and reports where
+// the follower got to, so the record keeps the cursor.
 func observeActivity(ctx context.Context, req observeRequest) (observeResult, error) {
 	// Attribute this whole beat to the container's record, so its logs,
 	// stats and scraped app-metrics land under docker/<name> — the
@@ -82,47 +86,112 @@ func observeActivity(ctx context.Context, req observeRequest) (observeResult, er
 		return res, nil
 	}
 	res.Status = insp.State.Status
-	if req.PrevStatus != "" && req.PrevStatus != res.Status {
-		obs.Warn(ctx, fmt.Sprintf("container %s -> %s", req.PrevStatus, res.Status),
-			obs.Str("container", req.Id))
-		obs.Count(ctx, "docker.container.transition", 1,
-			obs.Str("from", req.PrevStatus), obs.Str("to", res.Status))
-		// A status transition is a MILESTONE of the record, not only a
-		// log line: it goes into the entity's own history (dimension
-		// 2), where it survives every telemetry retention.
-		_ = obs.Event(ctx, "container-"+res.Status, map[string]string{
-			"from": req.PrevStatus, "to": res.Status, "container": req.Id,
-		})
+	reported := req.PrevStatus
+	if t := logs.tailOf(req.Id); t != nil {
+		cursor, status := t.position()
+		res.LastLogUnixNano = max(cursor, req.SinceUnixNano)
+		if status != "" {
+			reported = status // the follower has already told this one
+		}
+	} else {
+		logs.watch(req.Id, req.Entity, req.SinceUnixNano, res.Status)
 	}
-
-	// The container's own lines since the previous beat.
-	since := ""
-	if req.SinceUnixNano > 0 {
-		since = time.Unix(0, req.SinceUnixNano).UTC().Format(time.RFC3339Nano)
-	}
-	if logs, lerr := cli.ContainerLogs(ctx, req.Id, container.LogsOptions{
-		ShowStdout: true, ShowStderr: true, Since: since, Timestamps: true,
-	}); lerr == nil {
-		res.LastLogUnixNano = shipLogs(ctx, logs, req.SinceUnixNano)
-		_ = logs.Close()
+	if reported != "" && reported != res.Status {
+		reportTransition(ctx, req.Id, reported, res.Status, insp.State.ExitCode)
 	}
 
 	// One stats sample — the metric dimension of a running container.
 	if insp.State.Running {
-		if stats, serr := cli.ContainerStatsOneShot(ctx, req.Id); serr == nil {
-			shipStats(ctx, stats.Body)
-			_ = stats.Body.Close()
-		}
-		// The container's OWN application metrics: pull its prometheus
-		// endpoint and ship every sample under this record's reference —
-		// the obs interceptor already stamps entity=docker/<name>, so the
-		// scraped metrics correlate to the container with no token and no
-		// sidecar collector (Р-Н27: telemetry flows through the beat).
-		if req.Scrape != "" {
-			shipScrape(ctx, req.Scrape)
-		}
+		sample(ctx, cli, req.Id, req.Scrape)
 	}
 	return res, nil
+}
+
+// sample ships one stats reading and the container's own application
+// metrics: pull its prometheus endpoint and ship every sample under this
+// record's reference — no token and no sidecar collector (R-N27:
+// telemetry flows through the executor).
+func sample(ctx context.Context, cli *dockerclient.Client, id, scrape string) {
+	if stats, serr := cli.ContainerStatsOneShot(ctx, id); serr == nil {
+		shipStats(ctx, stats.Body)
+		_ = stats.Body.Close()
+	}
+	if scrape != "" {
+		shipScrape(ctx, scrape)
+	}
+}
+
+// reportTransition makes a status change the record's news: a louder
+// log line than a sample, a counter, and a milestone in the record's own
+// history (dimension 2), where it survives every telemetry retention.
+func reportTransition(ctx context.Context, id, from, to string, exitCode int) {
+	attrs := []obs.KV{obs.Str("container", id)}
+	payload := map[string]string{"from": from, "to": to, "container": id}
+	if to == "exited" || to == "dead" {
+		attrs = append(attrs, obs.Int("exitCode", exitCode))
+		payload["exitCode"] = strconv.Itoa(exitCode)
+	}
+	obs.Warn(ctx, fmt.Sprintf("container %s -> %s", from, to), attrs...)
+	obs.Count(ctx, "docker.container.transition", 1, obs.Str("from", from), obs.Str("to", to))
+	_ = obs.Event(ctx, "container-"+to, payload)
+}
+
+const (
+	followActivityName = "docker.container.follow"
+	drainActivityName  = "docker.container.drain"
+	// drainTimeout bounds a container's retirement — the stop's grace and
+	// the last read: the teardown must not wait on a daemon that is going
+	// away itself.
+	drainTimeout = (stopGrace + 10) * time.Second
+)
+
+// followActivity starts following a container's log from a cursor. It
+// returns at once; the follower streams from then on.
+func followActivity(_ context.Context, req observeRequest) error {
+	logs.watch(req.Id, req.Entity, req.SinceUnixNano, "running")
+	return nil
+}
+
+// drainActivity retires a container right before it is removed: a final
+// stats and scrape sample while it still runs, a stop with a grace period
+// (SIGTERM — the process flushes what it buffers and says goodbye), then
+// everything written after the follower's cursor is read and shipped —
+// the lines and numbers that explain how a container ended are the last
+// ones, and they must not go away with it. Bounded and best effort.
+func drainActivity(ctx context.Context, req observeRequest) error {
+	ctx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+	if req.Entity != "" {
+		ctx = obs.WithEntity(ctx, req.Entity)
+	}
+	t := logs.release(ctx, req.Id)
+	if t == nil {
+		// Not followed (an executor that restarted and never beat since):
+		// read on from the record's own cursor.
+		t = &tail{id: req.Id, entity: req.Entity, cursor: req.SinceUnixNano, streams: map[string]int64{}}
+	}
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = cli.Close() }()
+	if insp, ierr := cli.ContainerInspect(ctx, req.Id); ierr == nil && insp.State != nil && insp.State.Running {
+		if t.status == "" {
+			t.status = insp.State.Status
+		}
+		sample(ctx, cli, req.Id, req.Scrape)
+		grace := stopGrace
+		if serr := cli.ContainerStop(ctx, req.Id, container.StopOptions{Timeout: &grace}); serr != nil && !cerrdefs.IsNotFound(serr) {
+			obs.Warn(ctx, "container stop failed: "+serr.Error(), obs.Str("container", req.Id))
+		}
+		if after, aerr := cli.ContainerInspect(ctx, req.Id); aerr == nil && after.State != nil && t.status != "" && t.status != after.State.Status {
+			reportTransition(ctx, req.Id, t.status, after.State.Status, after.State.ExitCode)
+		}
+	}
+	if err := drain(ctx, cli, t); err != nil && !cerrdefs.IsNotFound(err) {
+		obs.Warn(ctx, "last log lines not read: "+err.Error(), obs.Str("container", req.Id))
+	}
+	return nil
 }
 
 // shipScrape pulls a prometheus endpoint and emits each sample as a
@@ -212,31 +281,6 @@ func sampleValue(t dto.MetricType, m *dto.Metric) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// shipLogs turns the docker log stream into obs log lines and returns
-// the newest timestamp seen.
-func shipLogs(ctx context.Context, logs io.Reader, last int64) int64 {
-	pr, pw := io.Pipe()
-	go func() {
-		_, _ = stdcopy.StdCopy(pw, pw, logs)
-		_ = pw.Close()
-	}()
-	scan := bufio.NewScanner(pr)
-	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scan.Scan() {
-		line := scan.Text()
-		// "2026-08-26T12:00:00.000000000Z body" — docker's own stamp.
-		ts, body := splitDockerStamp(line)
-		if ts > 0 && ts <= last {
-			continue // the Since window is second-coarse; drop the overlap
-		}
-		obs.Info(ctx, body, obs.Str("stream", "container"))
-		if ts > last {
-			last = ts
-		}
-	}
-	return last
 }
 
 // splitDockerStamp cuts docker's RFC3339Nano prefix off a log line.

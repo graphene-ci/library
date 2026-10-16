@@ -116,6 +116,15 @@ func boundedRemoveCtx(ctx workflow.Context) workflow.Context {
 	})
 }
 
+// drainCtx bounds the last read before a remove: one attempt, a little
+// over the activity's own bound — the teardown does not wait on it.
+func drainCtx(ctx workflow.Context) workflow.Context {
+	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: drainTimeout + 5*time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+}
+
 func containerDef() *entdefine.Definition[containerSpec, containerState] {
 	def := entdefine.New[containerSpec, containerState](ContainerKind,
 		entdefine.WithSearchAttributes[containerSpec, containerState](true),
@@ -132,7 +141,16 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			st.Name = spec.Name // recorded BEFORE create, so a cancel mid-create still finalizes
 			err := workflow.ExecuteActivity(entityActivityCtx(ctx), runActivityName,
 				Spec{Name: spec.Name, Config: spec.Config, Host: spec.Host}).Get(ctx, &st.Info)
-			return st, err
+			if err != nil {
+				return st, err
+			}
+			// From its first line: the executor follows the container's
+			// log as a stream, not at the next beat.
+			_ = workflow.ExecuteActivity(entityActivityCtx(ctx), followActivityName, observeRequest{
+				Id: st.Info.Id, Entity: workflow.GetInfo(ctx).WorkflowExecution.ID,
+			}).Get(ctx, nil)
+			st.Status = "running"
+			return st, nil
 		}),
 		entdefine.WithFinalize[containerSpec, containerState](func(ctx workflow.Context, st *containerState) error {
 			// Remove by NAME, not id: a cancel that cut init mid-create left
@@ -154,6 +172,14 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 			// it — we log and let the record go. A permanent wedge on one
 			// container would strand the entire cascade; a rare leak on a
 			// surviving machine is the lesser evil.
+			// The last words first: what the container wrote after the
+			// follower's cursor, and a final sample, before it is gone.
+			if st.Info.Id != "" {
+				_ = workflow.ExecuteActivity(drainCtx(ctx), drainActivityName, observeRequest{
+					Id: st.Info.Id, SinceUnixNano: st.ObservedUnixNano, Scrape: st.Scrape,
+					Entity: workflow.GetInfo(ctx).WorkflowExecution.ID,
+				}).Get(ctx, nil)
+			}
 			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), removeActivityName, target).Get(ctx, nil); err != nil {
 				workflow.GetLogger(ctx).Warn("container remove gave up; letting the record go",
 					"container", target, "error", err)
@@ -281,12 +307,16 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 	ctx.RecordActivity(runActivityName, runActivity)
 	ctx.RecordActivity(observeActivityName, observeActivity)
 	ctx.RecordActivity(removeActivityName, removeActivity)
+	ctx.RecordActivity(followActivityName, followActivity)
+	ctx.RecordActivity(drainActivityName, drainActivity)
 	ctx.RecordActivity(volumeEnsureActivityName, volumeEnsureActivity)
 	ctx.RecordActivity(volumeRemoveActivityName, volumeRemoveActivity)
 	ctx.RecordActivity(networkEnsureActivityName, networkEnsureActivity)
 	ctx.RecordActivity(networkRemoveActivityName, networkRemoveActivity)
 	declared := definitions{container: containerDef(), volume: volumeDef(), network: networkDef()}
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
+		// The log follower of this process, started with its worker.
+		startLogs.Do(func() { go logs.run() })
 		if err := declared.container.Register(w); err != nil {
 			return err
 		}
