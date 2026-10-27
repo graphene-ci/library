@@ -331,5 +331,5 @@ func shipLine(ctx context.Context, t *tail, line, stream string) {
 // emit ships one log line of a container; a variable so tests can see
 // what was shipped.
 var emit = func(ctx context.Context, body, stream string) {
-	obs.Info(ctx, body, obs.Str("stream", stream))
+	logAt(ctx, lineLevel(body), body, obs.Str("stream", stream))
 }

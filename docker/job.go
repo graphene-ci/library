@@ -147,8 +147,8 @@ func jobActivity(ctx context.Context, spec JobSpec) (JobReport, error) {
 		report.ExitCode = int(res.StatusCode)
 		if report.ExitCode != 0 {
 			// An outcome, not an activity failure — but in the run's logs
-			// it must not look like every other line: the tool's own
-			// output carries no severity, this record does.
+			// it must not look like every other line: the exit has no
+			// line of its own to carry a level, this record does.
 			obs.Warn(ctx, fmt.Sprintf("job %s exited with status %d", spec.Name, report.ExitCode),
 				obs.Str("job", spec.Name), obs.Int("exitCode", report.ExitCode))
 		}
@@ -243,7 +243,8 @@ func drainJobOutput(ctx context.Context, src io.Reader, tty bool, logFile io.Wri
 
 // The stream a line came from rides on its log record. It is NOT a
 // severity: half the tools in the world log their ordinary progress to
-// stderr, and pytest prints its failures to stdout.
+// stderr, and pytest prints its failures to stdout. The severity is the
+// level the line names itself (lineLevel).
 const (
 	streamStdout = "stdout"
 	streamStderr = "stderr"
@@ -299,7 +300,7 @@ func (w *jobLineWriter) emit(line []byte) {
 		w.record(w.stream, text)
 		return
 	}
-	obs.Info(w.ctx, text, obs.Str("job", w.name), obs.Str("stream", w.stream))
+	logAt(w.ctx, lineLevel(text), text, obs.Str("job", w.name), obs.Str("stream", w.stream))
 }
 
 // headBuffer keeps the first limit bytes and drops the rest.
