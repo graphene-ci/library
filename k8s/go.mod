@@ -3,8 +3,8 @@ module github.com/graphene-ci/library/k8s
 go 1.26.5
 
 require (
-	github.com/graphene-ci/pipeline v0.2.0
-	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
+	github.com/graphene-ci/pipeline v0.2.21
+	github.com/graphene-ci/temporal-entity v0.1.1
 	github.com/stretchr/testify v1.12.0
 	go.temporal.io/sdk v1.47.0
 	k8s.io/apimachinery v0.36.3
@@ -38,7 +38,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.21.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gopherex/schemapb/go v0.0.0-20260904155309-67a92c03b7e6 // indirect
+	github.com/gopherex/schemapb/go v0.0.0-20260923103231-06c47e842fa3 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
