@@ -10,10 +10,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
+	"github.com/graphene-ci/pipeline/pkg/wire"
 )
 
 func TestFileSafe(t *testing.T) {
@@ -91,7 +93,8 @@ func TestHostRecordLifecycle(t *testing.T) {
 	}
 }
 
-// A removal that keeps failing gives up instead of wedging the cascade.
+// A removal that keeps failing gives up instead of wedging the cascade,
+// and reports the leftover on its machine.
 func TestHostRecordRemovalGivesUp(t *testing.T) {
 	t.Parallel()
 	k := sysctlKind()
@@ -102,9 +105,17 @@ func TestHostRecordRemovalGivesUp(t *testing.T) {
 		activity.RegisterOptions{Name: k.apply})
 	env.RegisterActivityWithOptions(func(context.Context, applyRequest[sysctlSpec]) error { return errors.New("machine gone") },
 		activity.RegisterOptions{Name: k.remove})
+	reported := 0
+	env.RegisterActivityWithOptions(func(_ context.Context, req wire.ReportLeakRequest) error {
+		reported++
+		require.Contains(t, req.Error, "machine gone")
+		return nil
+	}, activity.RegisterOptions{Name: wire.ReportLeakActivity})
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "host-sysctl/db-db", TaskQueue: wire.AgentRunQueue("db", "run-1")})
 	env.RegisterDelayedCallback(func() { env.SignalWorkflow(entity.DeleteSignalName, nil) }, time.Second)
 	env.ExecuteWorkflow(string(SysctlKind), map[string]any{"spec": sysctlSpec{Values: map[string]string{"vm.swappiness": "10"}}})
 	require.NoError(t, env.GetWorkflowError())
+	require.Equal(t, 1, reported, "the leftover must be reported on the machine")
 }
 
 func BenchmarkFileSafe(b *testing.B) {

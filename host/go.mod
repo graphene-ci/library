@@ -3,7 +3,7 @@ module github.com/graphene-ci/library/host
 go 1.26.5
 
 require (
-	github.com/graphene-ci/pipeline v0.2.15
+	github.com/graphene-ci/pipeline v0.2.18
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	github.com/stretchr/testify v1.12.0
 	go.temporal.io/sdk v1.47.0

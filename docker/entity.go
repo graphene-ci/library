@@ -23,6 +23,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
+	"github.com/graphene-ci/pipeline/pkg/leak"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
 	"github.com/graphene-ci/pipeline/pkg/wire"
@@ -185,8 +186,7 @@ func containerDef() *entdefine.Definition[containerSpec, containerState] {
 				}).Get(ctx, nil)
 			}
 			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), removeActivityName, target).Get(ctx, nil); err != nil {
-				workflow.GetLogger(ctx).Warn("container remove gave up; letting the record go",
-					"container", target, "error", err)
+				leak.Report(ctx, err)
 			}
 			return nil
 		}),
@@ -236,8 +236,7 @@ func volumeDef() *entdefine.Definition[volumeSpec, volumeState] {
 			}
 			// BOUNDED and BEST-EFFORT — same reasoning as the container finalize.
 			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), volumeRemoveActivityName, target).Get(ctx, nil); err != nil {
-				workflow.GetLogger(ctx).Warn("volume remove gave up; letting the record go",
-					"volume", target, "error", err)
+				leak.Report(ctx, err)
 			}
 			return nil
 		}),
@@ -268,8 +267,7 @@ func networkDef() *entdefine.Definition[networkSpec, networkState] {
 			}
 			// BOUNDED and BEST-EFFORT — same reasoning as the container finalize.
 			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), networkRemoveActivityName, target).Get(ctx, nil); err != nil {
-				workflow.GetLogger(ctx).Warn("network remove gave up; letting the record go",
-					"network", target, "error", err)
+				leak.Report(ctx, err)
 			}
 			return nil
 		}),

@@ -33,6 +33,7 @@ import (
 	"github.com/graphene-ci/library/file/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/file"
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
+	"github.com/graphene-ci/pipeline/pkg/leak"
 	"github.com/graphene-ci/pipeline/pkg/machine"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
@@ -110,8 +111,7 @@ func fileDef() *entdefine.Definition[fileSpec, fileState] {
 			// ScheduleToCloseTimeout caps the total so a gone machine cannot
 			// wedge the cascade; a rare leftover file is the lesser evil.
 			if err := workflow.ExecuteActivity(boundedRemoveCtx(ctx), removeActivityName, st.Info.Path).Get(ctx, nil); err != nil {
-				workflow.GetLogger(ctx).Warn("file remove gave up; letting the record go",
-					"path", st.Info.Path, "error", err)
+				leak.Report(ctx, err)
 			}
 			return nil
 		}),

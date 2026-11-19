@@ -3,7 +3,7 @@ module github.com/graphene-ci/library/file
 go 1.26.5
 
 require (
-	github.com/graphene-ci/pipeline v0.2.0
+	github.com/graphene-ci/pipeline v0.2.18
 	github.com/graphene-ci/temporal-entity v0.0.0-20260824103956-3919c84e4abb
 	github.com/stretchr/testify v1.12.0
 	go.temporal.io/sdk v1.47.0
@@ -29,7 +29,7 @@ require (
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/go-containerregistry v0.21.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gopherex/schemapb/go v0.0.0-20260904155309-67a92c03b7e6 // indirect
+	github.com/gopherex/schemapb/go v0.0.0-20260923103231-06c47e842fa3 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect

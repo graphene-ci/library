@@ -33,6 +33,7 @@ import (
 
 	"github.com/graphene-ci/library/host/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/flow/ownership"
+	"github.com/graphene-ci/pipeline/pkg/leak"
 	"github.com/graphene-ci/pipeline/pkg/machine"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/ref"
@@ -126,8 +127,7 @@ func (k kindDef[Spec, Out]) definition() *entdefine.Definition[Spec, hostState[S
 		err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, k.removeOpts), k.remove,
 			applyRequest[Spec]{Record: record, Spec: st.Spec}).Get(ctx, nil)
 		if err != nil {
-			workflow.GetLogger(ctx).Warn("host setting removal gave up; letting the record go",
-				"kind", string(k.kind), "error", err)
+			leak.Report(ctx, err)
 		}
 	}
 	def := entdefine.New[Spec, state](k.kind,
