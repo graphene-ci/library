@@ -46,12 +46,16 @@ type fsys struct {
 	r *os.Root
 }
 
-func (m Machine) open() (fsys, error) {
-	dir := m.root
-	if dir == "" {
-		dir = "/"
+// rootDir is the machine's filesystem root as this process reaches it.
+func (m Machine) rootDir() string {
+	if m.root == "" {
+		return "/"
 	}
-	r, err := os.OpenRoot(dir)
+	return m.root
+}
+
+func (m Machine) open() (fsys, error) {
+	r, err := os.OpenRoot(m.rootDir())
 	if err != nil {
 		return fsys{}, err
 	}

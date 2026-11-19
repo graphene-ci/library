@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -104,11 +105,19 @@ func TestSetAccessRefusesSymlink(t *testing.T) {
 	t.Parallel()
 	m, root := fixture(t, map[string]string{"/etc/keep": "x"})
 	require.NoError(t, os.Symlink("etc", filepath.Join(root, "swapped")))
-	f := opened(t, m)
-	require.Error(t, setAccess(f, "swapped", 0o700, os.Getuid(), os.Getgid()))
+	require.Error(t, setAccess(m.rootDir(), "swapped", 0o700, os.Getuid(), os.Getgid()))
 	st, err := os.Stat(filepath.Join(root, "etc"))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o750), st.Mode().Perm(), "fixture dirs are 0750")
+}
+
+// A FIFO planted where the directory should be is refused at once, not
+// opened (which would block forever).
+func TestSetAccessRefusesFifo(t *testing.T) {
+	t.Parallel()
+	m, root := fixture(t, nil)
+	require.NoError(t, syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600))
+	require.Error(t, setAccess(m.rootDir(), "pipe", 0o700, os.Getuid(), os.Getgid()))
 }
 
 func BenchmarkPurge(b *testing.B) {
