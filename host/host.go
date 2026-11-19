@@ -178,6 +178,13 @@ func (k kindDef[Spec, Out]) declarer(def *entdefine.Definition[Spec, hostState[S
 		if _, err := bound.CreateOrAttach(ctx, rid, spec, entclient.WithLabels(labels)); err != nil {
 			return nil, err
 		}
+		// An existing setting keeps its spec: a different one is refused,
+		// not silently ignored.
+		if desc, err := bound.Describe(ctx, rid); err == nil {
+			if err := pipeline.CheckRedeclare(string(k.kind), req.Name, desc.Spec, spec); err != nil {
+				return nil, err
+			}
+		}
 		for {
 			desc, err := bound.Describe(ctx, rid)
 			if err != nil {
@@ -317,6 +324,13 @@ func recordEntitiesOnce(ctx pipeline.Context, m Machine) {
 			}
 		}
 		w.RegisterActivityWithOptions(makeDeclare(cl, declarers), temporalactivity.RegisterOptions{Name: contract.DeclareActivity})
+		// A lookup binds the kind's definition for its types; it registers
+		// nothing.
+		dirDef := dirKind().definition()
+		w.RegisterActivityWithOptions(func(ctx context.Context, name string) (DirInfo, error) {
+			st, err := pipeline.AwaitRecord(ctx, entclient.Bind(dirDef, cl, temporalactivity.GetInfo(ctx).TaskQueue), string(DirKind), entity.ResourceID(name))
+			return st.Info, err
+		}, temporalactivity.RegisterOptions{Name: attachDirActivity})
 		return nil
 	})
 }
@@ -486,4 +500,21 @@ func Mount(ctx pipeline.Context, agent pipeline.Agent, req MountRequest, opts ..
 	return declare[MountInfo](ctx, agent, MountKind, recordName(agent, req.Mountpoint), opts,
 		func(t contract.Tree) any { spec.Tree = t; return spec },
 		func() error { return validateMount(spec) })
+}
+
+// attachDirActivity recognizes an existing directory record.
+const attachDirActivity = "host.dir.attach"
+
+// AttachDir recognizes a directory record that EXISTS on the agent's
+// machine — data a stand keeps between runs — and never creates it: a
+// missing or departing record fails the handle. The run does not own
+// what it attaches.
+func AttachDir(ctx pipeline.Context, agent pipeline.Agent, path string) pipeline.Attached[DirInfo] {
+	name := recordName(agent, path)
+	if ctx.Recording() {
+		recordEntities(ctx)
+		ctx.RecordStep("attach", string(DirKind)+"/"+name, string(agent.AgentId()), "foreign")
+		return pipeline.NewAttached[DirInfo](ctx, nil)
+	}
+	return pipeline.NewAttached[DirInfo](ctx, pipeline.DispatchOnAgent(ctx, agent.AgentId(), dispatchOpts(), attachDirActivity, name))
 }

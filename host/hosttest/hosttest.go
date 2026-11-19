@@ -19,6 +19,15 @@ import (
 
 // Install makes host declarations converge in the simulator.
 func Install(world *pipelinetest.World) {
+	// AttachDir finds a directory record the world already holds.
+	pipelinetest.Handle1(world, "host.dir.attach", func(_ workflow.Context, name string) (hostlib.DirInfo, error) {
+		var info hostlib.DirInfo
+		r, ok := world.Resource(ref.OwnerRef(contract.DirKind + "/" + name))
+		if !ok || r.Phase != "ready" {
+			return info, fmt.Errorf("dir %s does not exist or is not ready", name)
+		}
+		return info, json.Unmarshal(r.State, &info)
+	})
 	pipelinetest.Handle1(world, contract.DeclareActivity, func(ctx workflow.Context, req contract.DeclareRequest) (any, error) {
 		tree, info, err := simulate(req)
 		if err != nil {

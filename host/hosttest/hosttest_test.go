@@ -1,6 +1,8 @@
 package hosttest_test
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -69,4 +71,33 @@ func TestInvalidDeclarationFails(t *testing.T) {
 	var msg string
 	require.NoError(t, w.Env.GetWorkflowResult(&msg))
 	require.Contains(t, msg, "clean absolute path")
+}
+
+// A directory a stand keeps is found again by path; a path never declared
+// is not created by an attach.
+func TestAttachDir(t *testing.T) {
+	t.Parallel()
+	var suite testsuite.WorkflowTestSuite
+	w := pipelinetest.Install(t, suite.NewTestWorkflowEnvironment())
+	hosttest.Install(w)
+	w.ConnectAfter("db", 0)
+	wf := pipelinetest.Workflow(w, "keep", func(ctx pipeline.Context, _ struct{}) (string, error) {
+		a := pipeline.NewAgent(ctx, "db")
+		data := hostlib.Dir(ctx, a, "/data/pg", hostlib.DirAccess{})
+		data.Ready(ctx)
+		pipeline.ToStand(ctx, a)
+		found, err := hostlib.AttachDir(ctx, a, "/data/pg").TryReady(ctx)
+		if err != nil || found.Path != "/data/pg" {
+			return "", fmt.Errorf("kept dir %+v: %w", found, err)
+		}
+		if _, err := hostlib.AttachDir(ctx, a, "/data/none").TryReady(ctx); err == nil {
+			return "", errors.New("an attach created a dir that was never declared")
+		}
+		return "ok", nil
+	})
+	w.Env.ExecuteWorkflow(wf, struct{}{})
+	require.NoError(t, w.Env.GetWorkflowError())
+	var got string
+	require.NoError(t, w.Env.GetWorkflowResult(&got))
+	require.Equal(t, "ok", got)
 }

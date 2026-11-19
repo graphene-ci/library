@@ -31,6 +31,15 @@ func OnJob(world *pipelinetest.World, agent id.AgentId, name string) *testsuite.
 // Install installs deterministic container/volume/network outputs and the
 // docker.install capability effect. version is explicit test data.
 func Install(world *pipelinetest.World, version string) {
+	// AttachContainer finds a container record the world already holds.
+	pipelinetest.Handle1(world, "docker.attach", func(_ workflow.Context, name string) (dockerlib.Info, error) {
+		var info dockerlib.Info
+		r, ok := world.Resource(ref.OwnerRef(string(dockerlib.ContainerKind) + "/" + name))
+		if !ok || r.Phase != "ready" {
+			return info, fmt.Errorf("container %s does not exist or is not ready", name)
+		}
+		return info, json.Unmarshal(r.State, &info)
+	})
 	world.Handle("docker.install", func(ctx workflow.Context, _ []any) (any, error) {
 		agent := pipelinetest.Agent(ctx)
 		installed, resolved := true, version

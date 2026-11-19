@@ -87,3 +87,27 @@ func TestOnJobPicksByName(t *testing.T) {
 	w.Env.AssertExpectations(t)
 	w.AssertNoLeaks(t)
 }
+
+// A container the world holds is found again by name; a name never
+// declared is not created by an attach.
+func TestAttachContainer(t *testing.T) {
+	t.Parallel()
+	var suite testsuite.WorkflowTestSuite
+	w := pipelinetest.Install(t, suite.NewTestWorkflowEnvironment())
+	dockertest.Install(w, "28.5.2")
+	w.ConnectAfter("machine", 0)
+	wf := pipelinetest.Workflow(w, "keep", func(ctx pipeline.Context, _ struct{}) (bool, error) {
+		a := pipeline.NewAgent(ctx, "machine")
+		dockerlib.Container(ctx, a, dockerlib.Spec{Name: "pg", Config: &container.Config{Image: "postgres:17"}}).Ready(ctx)
+		if _, err := dockerlib.AttachContainer(ctx, a, "pg").TryReady(ctx); err != nil {
+			return false, err
+		}
+		_, err := dockerlib.AttachContainer(ctx, a, "none").TryReady(ctx)
+		return err != nil, nil
+	})
+	w.Env.ExecuteWorkflow(wf, struct{}{})
+	require.NoError(t, w.Env.GetWorkflowError())
+	var refused bool
+	require.NoError(t, w.Env.GetWorkflowResult(&refused))
+	require.True(t, refused, "an attach must not create a container")
+}

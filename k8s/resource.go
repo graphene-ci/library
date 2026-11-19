@@ -291,6 +291,13 @@ func makeDeclare(cl client.Client, registry map[string]*kindEntry) func(context.
 		if _, err := entities.CreateOrAttach(ctx, rid, req.Spec, entclient.WithLabels(labels)); err != nil {
 			return k8sState{}, err
 		}
+		// An existing object keeps its spec: a different one is refused,
+		// not silently ignored.
+		if desc, err := entities.Describe(ctx, rid); err == nil {
+			if err := pipeline.CheckRedeclare(req.Kind, req.Name, desc.Spec, req.Spec); err != nil {
+				return k8sState{}, err
+			}
+		}
 		for {
 			out, err := entities.Describe(ctx, rid)
 			if err != nil {

@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -11,9 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
+	"github.com/graphene-ci/library/host/internal/contract"
 	"github.com/graphene-ci/pipeline/pkg/pipeline"
 	"github.com/graphene-ci/pipeline/pkg/wire"
 )
@@ -121,5 +124,64 @@ func TestHostRecordRemovalGivesUp(t *testing.T) {
 func BenchmarkFileSafe(b *testing.B) {
 	for b.Loop() {
 		_ = fileSafe("host-dir/agent-1-/data/run-42/ydb/pdisk")
+	}
+}
+
+// redeclareClient is a Temporal client holding one existing record with
+// a stored spec: create attaches, describe answers with that spec.
+type redeclareClient struct {
+	client.Client
+	stored sysctlSpec
+}
+
+func (c redeclareClient) ExecuteWorkflow(context.Context, client.StartWorkflowOptions, any, ...any) (client.WorkflowRun, error) {
+	return nil, nil
+}
+
+func (c redeclareClient) QueryWorkflow(context.Context, string, string, string, ...any) (converter.EncodedValue, error) {
+	return describeOf{spec: c.stored}, nil
+}
+
+type describeOf struct{ spec sysctlSpec }
+
+func (describeOf) HasValue() bool { return true }
+
+func (d describeOf) Get(ptr any) error {
+	raw, err := json.Marshal(map[string]any{"phase": entity.PhaseReady, "spec": d.spec, "state": map[string]any{"info": SysctlInfo{}}})
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, ptr)
+}
+
+// Declaring a name that exists attaches only with the same spec: another
+// value would silently not apply, so it is refused.
+func TestRedeclare(t *testing.T) {
+	t.Parallel()
+	stored := sysctlSpec{Tree: contract.Tree{Owner: "stand/lab"}, Values: map[string]string{"vm.swappiness": "10"}}
+	cases := []struct {
+		name     string
+		values   map[string]string
+		mismatch bool
+	}{
+		{name: "same values, another owner", values: map[string]string{"vm.swappiness": "10"}},
+		{name: "another value", values: map[string]string{"vm.swappiness": "1"}, mismatch: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			k := sysctlKind()
+			declare := k.declarer(k.definition())
+			raw, err := json.Marshal(sysctlSpec{Tree: contract.Tree{Owner: "run/r2"}, Values: c.values})
+			require.NoError(t, err)
+			_, err = declare(context.Background(), redeclareClient{stored: stored}, "agent/db/run/r2",
+				contract.DeclareRequest{Kind: contract.SysctlKind, Name: "db-db", Spec: raw}, nil)
+			var app *temporal.ApplicationError
+			if c.mismatch {
+				require.True(t, errors.As(err, &app) && app.Type() == pipeline.CodeSpecMismatch, "err = %v", err)
+				return
+			}
+			require.NoError(t, err)
+		})
 	}
 }

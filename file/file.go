@@ -222,6 +222,13 @@ func makeDeclare(cl client.Client, declared *entdefine.Definition[fileSpec, file
 		if _, err := bound.CreateOrAttach(ctx, rid, spec, entclient.WithLabels(labels)); err != nil {
 			return nil, err
 		}
+		// An existing file keeps its content: a different one is refused,
+		// not silently ignored.
+		if desc, err := bound.Describe(ctx, rid); err == nil {
+			if err := pipeline.CheckRedeclare(string(FileKind), req.Name, desc.Spec, spec); err != nil {
+				return nil, err
+			}
+		}
 		for {
 			desc, err := bound.Describe(ctx, rid)
 			if err != nil {

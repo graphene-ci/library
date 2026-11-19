@@ -333,8 +333,29 @@ func recordEntitiesOnce(ctx pipeline.Context) {
 			return err
 		}
 		w.RegisterActivityWithOptions(makeDeclare(cl, declared), temporalactivity.RegisterOptions{Name: declareActivityName})
+		w.RegisterActivityWithOptions(func(ctx context.Context, name string) (Info, error) {
+			st, err := pipeline.AwaitRecord(ctx, entclient.Bind(declared.container, cl, temporalactivity.GetInfo(ctx).TaskQueue), string(ContainerKind), entity.ResourceID(name))
+			return st.Info, err
+		}, temporalactivity.RegisterOptions{Name: attachActivityName})
 		return nil
 	})
+}
+
+// attachActivityName recognizes an existing container record.
+const attachActivityName = "docker.attach"
+
+// AttachContainer recognizes a container record that EXISTS — one a stand
+// keeps between runs (a database deployed once, used by many) — and never
+// creates it: a missing or departing record fails the handle. The run does
+// not own what it attaches; the record's own owner decides its life.
+// agent is a machine of this run that executes the lookup.
+func AttachContainer(ctx pipeline.Context, agent pipeline.Agent, name string) pipeline.Attached[Info] {
+	if ctx.Recording() {
+		recordEntities(ctx)
+		ctx.RecordStep("attach", string(ContainerKind)+"/"+name, string(agent.AgentId()), "foreign")
+		return pipeline.NewAttached[Info](ctx, nil)
+	}
+	return pipeline.NewAttached[Info](ctx, pipeline.DispatchOnAgent(ctx, agent.AgentId(), dockerActivityOptions(), attachActivityName, name))
 }
 
 // makeDeclare builds the declare activity: create (or attach to) the
@@ -359,21 +380,21 @@ func makeDeclare(cl client.Client, declared definitions) func(context.Context, d
 			if err := json.Unmarshal(req.Spec, &spec); err != nil {
 				return nil, err
 			}
-			return declareOne(ctx, entclient.Bind(declared.container, cl, queue), req.Name, spec, labels,
+			return declareOne(ctx, entclient.Bind(declared.container, cl, queue), string(ContainerKind), req.Name, spec, labels,
 				func(st containerState) any { return st.Info })
 		case VolumeKind:
 			var spec volumeSpec
 			if err := json.Unmarshal(req.Spec, &spec); err != nil {
 				return nil, err
 			}
-			return declareOne(ctx, entclient.Bind(declared.volume, cl, queue), req.Name, spec, labels,
+			return declareOne(ctx, entclient.Bind(declared.volume, cl, queue), string(VolumeKind), req.Name, spec, labels,
 				func(st volumeState) any { return st.Info })
 		case NetworkKind:
 			var spec networkSpec
 			if err := json.Unmarshal(req.Spec, &spec); err != nil {
 				return nil, err
 			}
-			return declareOne(ctx, entclient.Bind(declared.network, cl, queue), req.Name, spec, labels,
+			return declareOne(ctx, entclient.Bind(declared.network, cl, queue), string(NetworkKind), req.Name, spec, labels,
 				func(st networkState) any { return st.Info })
 		default:
 			return nil, fmt.Errorf("unknown docker entity kind %q", req.Kind)
@@ -382,10 +403,17 @@ func makeDeclare(cl client.Client, declared definitions) func(context.Context, d
 }
 
 // declareOne is the create-and-wait shared by the three kinds.
-func declareOne[Spec, State any](ctx context.Context, cl *entclient.Client[Spec, State], name string, spec Spec, labels map[string]string, out func(State) any) (json.RawMessage, error) {
+func declareOne[Spec, State any](ctx context.Context, cl *entclient.Client[Spec, State], kind, name string, spec Spec, labels map[string]string, out func(State) any) (json.RawMessage, error) {
 	rid := entity.ResourceID(name)
 	if _, err := cl.CreateOrAttach(ctx, rid, spec, entclient.WithLabels(labels)); err != nil {
 		return nil, err
+	}
+	// An existing record keeps its spec: a different one is refused, not
+	// silently ignored.
+	if desc, err := cl.Describe(ctx, rid); err == nil {
+		if err := pipeline.CheckRedeclare(kind, name, desc.Spec, spec); err != nil {
+			return nil, err
+		}
 	}
 	for {
 		desc, err := cl.Describe(ctx, rid)
