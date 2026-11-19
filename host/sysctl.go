@@ -96,7 +96,7 @@ func (m Machine) applySysctl(_ context.Context, req applyRequest[sysctlSpec]) (S
 		return SysctlInfo{}, err
 	}
 	// systemd-sysctl reads it as root: owner-only is enough.
-	if err := f.r.WriteFile(rel(dropIn), []byte(conf.String()), 0o600); err != nil {
+	if err := f.writeFile(dropIn, []byte(conf.String()), 0o600); err != nil {
 		return SysctlInfo{}, err
 	}
 	for _, key := range keys {

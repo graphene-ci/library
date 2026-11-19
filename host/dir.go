@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"time"
 
@@ -73,14 +74,41 @@ func (m Machine) applyDir(_ context.Context, req applyRequest[dirSpec]) (DirInfo
 	if err := f.r.MkdirAll(name, mode); err != nil {
 		return DirInfo{}, err
 	}
-	// MkdirAll's mode passes through the umask; the spec's is exact.
-	if err := f.r.Chmod(name, mode); err != nil {
-		return DirInfo{}, err
-	}
-	if err := f.r.Lchown(name, req.Spec.UID, req.Spec.GID); err != nil {
+	if err := setAccess(f, name, mode, req.Spec.UID, req.Spec.GID); err != nil {
 		return DirInfo{}, err
 	}
 	return DirInfo{Path: req.Spec.Path}, nil
+}
+
+// setAccess sets mode and owner through a descriptor of the directory
+// itself, verified to BE the path: a workload that swaps the path for a
+// symlink gets an error, never a chmod or chown of the symlink's target.
+// The descriptor is opened first and compared with a no-follow Lstat
+// after: a swap before the open shows as a symlink or another inode, a
+// swap after it no longer matters — the descriptor holds the real
+// directory. MkdirAll's mode passes through the umask; the spec's is
+// exact.
+func setAccess(f fsys, name string, mode fs.FileMode, uid, gid int) error {
+	dir, err := f.r.Open(name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	opened, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	at, err := f.r.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !at.IsDir() || !os.SameFile(opened, at) {
+		return fmt.Errorf("dir %s changed under the record: not the directory it created", name)
+	}
+	if err := dir.Chmod(mode); err != nil {
+		return err
+	}
+	return dir.Chown(uid, gid)
 }
 
 // removeDir moves the record's directory into the trash beside it, gives

@@ -111,7 +111,7 @@ func (m Machine) applyUnit(ctx context.Context, req applyRequest[unitSpec]) (Uni
 		return UnitInfo{}, err
 	}
 	// systemd reads unit files as root: owner-only is enough.
-	if err := f.r.WriteFile(rel(file), req.Spec.Content, 0o600); err != nil {
+	if err := f.writeFile(file, req.Spec.Content, 0o600); err != nil {
 		return UnitInfo{}, err
 	}
 	if err := m.systemctl(ctx, "daemon-reload"); err != nil {

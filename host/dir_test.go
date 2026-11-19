@@ -98,6 +98,19 @@ func TestDirStaysOnTheMachine(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "nothing may appear outside the machine root")
 }
 
+// A path swapped for a symlink after the mkdir is refused: its target's
+// mode stays as it was.
+func TestSetAccessRefusesSymlink(t *testing.T) {
+	t.Parallel()
+	m, root := fixture(t, map[string]string{"/etc/keep": "x"})
+	require.NoError(t, os.Symlink("etc", filepath.Join(root, "swapped")))
+	f := opened(t, m)
+	require.Error(t, setAccess(f, "swapped", 0o700, os.Getuid(), os.Getgid()))
+	st, err := os.Stat(filepath.Join(root, "etc"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o750), st.Mode().Perm(), "fixture dirs are 0750")
+}
+
 func BenchmarkPurge(b *testing.B) {
 	m, root := fixture(b, nil)
 	f, err := m.open()

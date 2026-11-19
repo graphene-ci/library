@@ -91,6 +91,28 @@ func (f fsys) writeValue(p, value string) error {
 	return file.Close()
 }
 
+// writeFile replaces p with data atomically, never through a symlink: the
+// bytes go to a fresh file created exclusively beside p, and a rename puts
+// it in place. A symlink planted at p is replaced, not followed.
+func (f fsys) writeFile(p string, data []byte, perm fs.FileMode) error {
+	tmp := rel(p) + ".graphene-tmp"
+	if err := f.r.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	file, err := f.r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write %s: %w", p, err)
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return f.r.Rename(tmp, rel(p))
+}
+
 // execRunner runs programs on the machine through pipeline/pkg/machine.
 type execRunner struct{}
 

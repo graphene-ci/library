@@ -158,6 +158,23 @@ func TestClaimRaceHasOneWinner(t *testing.T) {
 	require.Equal(t, 1, wins)
 }
 
+// A symlink planted where a record writes is replaced, never followed: its
+// target keeps its bytes.
+func TestWriteFileReplacesSymlink(t *testing.T) {
+	t.Parallel()
+	m, root := fixture(t, map[string]string{"/etc/shadow": "secret"})
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/systemd/system"), 0o750))
+	require.NoError(t, os.Symlink("../../shadow", filepath.Join(root, "etc/systemd/system/x.service")))
+	f := opened(t, m)
+	require.NoError(t, f.writeFile("/etc/systemd/system/x.service", []byte("[Service]\n"), 0o600))
+	require.Equal(t, "secret", readFile(t, root, "/etc/shadow"))
+	require.Equal(t, "[Service]\n", readFile(t, root, "/etc/systemd/system/x.service"))
+	// A retry after a crash that left the temporary file behind succeeds.
+	require.NoError(t, f.r.WriteFile(rel("/etc/systemd/system/x.service.graphene-tmp"), []byte("stale"), 0o600))
+	require.NoError(t, f.writeFile("/etc/systemd/system/x.service", []byte("v2"), 0o600))
+	require.Equal(t, "v2", readFile(t, root, "/etc/systemd/system/x.service"))
+}
+
 func TestExecRunner(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
