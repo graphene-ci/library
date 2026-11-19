@@ -83,6 +83,21 @@ func (m Machine) systemctl(ctx context.Context, args ...string) error {
 	return err
 }
 
+// requireActive checks that a started unit IS running. `systemctl enable
+// --now` exits 0 even when the start job fails (a dependency that never
+// came up), so its exit status proves nothing. A unit still activating is
+// a retryable error: the apply tries again.
+func (m Machine) requireActive(ctx context.Context, unit string) error {
+	out, err := m.runner.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit)
+	if err != nil {
+		return err
+	}
+	if state := strings.TrimSpace(out); state != "active" {
+		return fmt.Errorf("unit %s is %s after start, not active", unit, state)
+	}
+	return nil
+}
+
 // applyUnit installs the record's own unit file, enables and starts it. A
 // unit file that exists and is not the record's is refused.
 func (m Machine) applyUnit(ctx context.Context, req applyRequest[unitSpec]) (UnitInfo, error) {
@@ -118,6 +133,9 @@ func (m Machine) applyUnit(ctx context.Context, req applyRequest[unitSpec]) (Uni
 		return UnitInfo{}, err
 	}
 	if err := m.systemctl(ctx, "enable", "--now", req.Spec.Name); err != nil {
+		return UnitInfo{}, err
+	}
+	if err := m.requireActive(ctx, req.Spec.Name); err != nil {
 		return UnitInfo{}, err
 	}
 	return UnitInfo{Name: req.Spec.Name, Path: file}, nil

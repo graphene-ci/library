@@ -196,6 +196,23 @@ func (f fsys) take(kind, key, record string, readPrior func() (string, error)) (
 	return c, file.Close()
 }
 
+// mark records a new prior on the record's own claim — a fact the record
+// established that a retried apply must not mistake for the machine's.
+func (f fsys) mark(kind, key, record, prior string) error {
+	c, ours, err := f.held(kind, key, record)
+	if err != nil {
+		return err
+	}
+	if !ours {
+		return conflict(kind, key, c.Record)
+	}
+	b, err := json.Marshal(claim{Record: record, Prior: prior})
+	if err != nil {
+		return err
+	}
+	return f.writeFile(claimPath(kind, key), b, 0o600)
+}
+
 // held reports the record's claim on key, if it has one.
 func (f fsys) held(kind, key, record string) (claim, bool, error) {
 	c, err := f.readClaim(claimPath(kind, key))

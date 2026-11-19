@@ -111,7 +111,9 @@ func nilIfEmpty(s []string) []string {
 
 func TestUnitLifecycle(t *testing.T) {
 	t.Parallel()
-	r := &scripted{}
+	r := &scripted{answers: map[string]answer{
+		"systemctl show --property=ActiveState --value node-exporter.service": {out: "active\n"},
+	}}
 	m := NewMachine(t.TempDir(), r)
 	content := []byte("[Service]\nExecStart=/usr/local/bin/node_exporter\n[Install]\nWantedBy=multi-user.target\n")
 	req := applyRequest[unitSpec]{Record: "host-unit/m-node-exporter.service", Spec: unitSpec{Name: "node-exporter.service", Content: content}}
@@ -119,15 +121,35 @@ func TestUnitLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, UnitInfo{Name: "node-exporter.service", Path: "/etc/systemd/system/node-exporter.service"}, info)
 	require.Equal(t, string(content), readFile(t, m.root, info.Path))
-	require.Equal(t, []string{"systemctl daemon-reload", "systemctl enable --now node-exporter.service"}, r.Calls())
+	require.Equal(t, []string{"systemctl daemon-reload", "systemctl enable --now node-exporter.service",
+		"systemctl show --property=ActiveState --value node-exporter.service"}, r.Calls())
 
 	require.NoError(t, m.removeUnit(context.Background(), req))
 	_, err = os.Stat(filepath.Join(m.root, rel(info.Path)))
 	require.True(t, os.IsNotExist(err))
 	require.Equal(t, []string{
 		"systemctl daemon-reload", "systemctl enable --now node-exporter.service",
+		"systemctl show --property=ActiveState --value node-exporter.service",
 		"systemctl disable --now node-exporter.service", "systemctl daemon-reload",
 	}, r.Calls())
+}
+
+// `systemctl enable --now` exits 0 when the start job fails; the record
+// is not ready until the unit IS active.
+func TestUnitThatDoesNotStart(t *testing.T) {
+	t.Parallel()
+	cases := []string{"inactive", "failed", "activating"}
+	for _, state := range cases {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			r := &scripted{answers: map[string]answer{
+				"systemctl show --property=ActiveState --value x.service": {out: state + "\n"},
+			}}
+			m := NewMachine(t.TempDir(), r)
+			_, err := m.applyUnit(context.Background(), applyRequest[unitSpec]{Record: "host-unit/m-x", Spec: unitSpec{Name: "x.service", Content: []byte("[Service]\n")}})
+			require.ErrorContains(t, err, "is "+state+" after start")
+		})
+	}
 }
 
 // A unit file the record did not install is never taken over or removed.

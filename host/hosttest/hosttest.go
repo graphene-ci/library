@@ -61,6 +61,10 @@ func simulate(req contract.DeclareRequest) (contract.Tree, any, error) {
 		var s contract.UnitStateSpec
 		err := json.Unmarshal(req.Spec, &s)
 		return s.Tree, hostlib.UnitStateInfo{Name: s.Name}, err
+	case contract.MountKind:
+		var s contract.MountSpec
+		err := json.Unmarshal(req.Spec, &s)
+		return s.Tree, hostlib.MountInfo{Device: s.Device, Mountpoint: s.Mountpoint, FSType: s.FSType}, err
 	default:
 		return contract.Tree{}, nil, fmt.Errorf("unknown host kind %q", req.Kind)
 	}

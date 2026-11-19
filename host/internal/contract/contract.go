@@ -19,6 +19,7 @@ const (
 	DirKind       = "host-dir"
 	UnitKind      = "host-unit"
 	UnitStateKind = "host-unit-state"
+	MountKind     = "host-mount"
 )
 
 // Tree carries the record's place in the ownership tree; every spec has it.
@@ -63,6 +64,18 @@ type UnitStateSpec struct {
 	Tree
 	Name string `json:"name"`
 	Want string `json:"want"`
+}
+
+// MountSpec mounts a filesystem the record holds, or checks one it does
+// not (Check).
+type MountSpec struct {
+	Tree
+	Device     string   `json:"device"`
+	Mountpoint string   `json:"mountpoint"`
+	FSType     string   `json:"fsType"`
+	Options    []string `json:"options,omitempty"`
+	Format     bool     `json:"format,omitempty"`
+	Check      bool     `json:"check,omitempty"`
 }
 
 // DeclareRequest starts or attaches to a host resource of Kind.

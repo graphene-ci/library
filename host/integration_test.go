@@ -108,3 +108,65 @@ func TestRealUnitState(t *testing.T) {
 	require.Equal(t, "enabled", systemctlWord(t, m, "is-enabled", "graphene-vendor-it.service"))
 	require.Equal(t, "active", systemctlWord(t, m, "is-active", "graphene-vendor-it.service"))
 }
+
+// A loop device stands in for a data disk: formatted only while blank,
+// mounted through a unit, unmounted on removal with the data kept, then
+// mounted again without a format, and checked as someone else's mount.
+func TestRealMount(t *testing.T) {
+	m := realMachine(t)
+	ctx := context.Background()
+	img := "/srv/it-disk.img"
+	require.NoError(t, os.WriteFile(img, nil, 0o600))
+	require.NoError(t, os.Truncate(img, 64<<20))
+	out, err := execRunner{}.Run(ctx, "losetup", "-f", "--show", img)
+	require.NoError(t, err)
+	dev := strings.TrimSpace(out)
+	// A mount unit waits for udev's device unit, as on a real machine.
+	_, err = execRunner{}.Run(ctx, "udevadm", "trigger", "--action=add", "--subsystem-match=block")
+	require.NoError(t, err)
+	_, err = execRunner{}.Run(ctx, "udevadm", "settle")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = execRunner{}.Run(ctx, "losetup", "-d", dev)
+		_ = os.Remove(img)
+	})
+
+	req := applyRequest[mountSpec]{Record: "host-mount/it", Spec: mountSpec{Device: dev, Mountpoint: "/srv/it-mnt", FSType: "ext4", Format: true}}
+	info, err := m.applyMount(ctx, req)
+	require.NoError(t, err)
+	require.True(t, info.Formatted)
+	src, fsType := m.mounted(ctx, "/srv/it-mnt")
+	require.Equal(t, dev, src)
+	require.Equal(t, "ext4", fsType)
+	require.NoError(t, os.WriteFile("/srv/it-mnt/keep", []byte("data"), 0o600))
+
+	require.NoError(t, m.removeMount(ctx, req))
+	src, _ = m.mounted(ctx, "/srv/it-mnt")
+	require.Empty(t, src, "removal unmounts")
+	sig, err := m.signature(ctx, dev)
+	require.NoError(t, err)
+	require.Equal(t, "ext4", sig, "removal never wipes")
+
+	// Again, without Format: the filesystem is reused, the data is there.
+	again := applyRequest[mountSpec]{Record: "host-mount/it-2", Spec: mountSpec{Device: dev, Mountpoint: "/srv/it-mnt", FSType: "ext4"}}
+	info, err = m.applyMount(ctx, again)
+	require.NoError(t, err)
+	require.False(t, info.Formatted)
+	got, err := os.ReadFile("/srv/it-mnt/keep")
+	require.NoError(t, err)
+	require.Equal(t, "data", string(got))
+
+	// Another record checks the mount it did not make.
+	check := applyRequest[mountSpec]{Record: "host-mount/it-check", Spec: mountSpec{Device: dev, Mountpoint: "/srv/it-mnt", FSType: "ext4", Check: true}}
+	_, err = m.applyMount(ctx, check)
+	require.NoError(t, err)
+	wrong := check
+	wrong.Spec.FSType = "xfs"
+	_, err = m.applyMount(ctx, wrong)
+	require.True(t, isConflict(err), "got %v", err)
+	require.NoError(t, m.removeMount(ctx, check))
+	src, _ = m.mounted(ctx, "/srv/it-mnt")
+	require.Equal(t, dev, src, "a check's removal leaves the mount alone")
+
+	require.NoError(t, m.removeMount(ctx, again))
+}

@@ -21,10 +21,13 @@ type answer struct {
 }
 
 // scripted is a Runner that answers from a table and records every call.
+// A call with a queue in seq takes its answers in order (the last one
+// repeats); otherwise answers holds its one answer.
 type scripted struct {
 	mu      sync.Mutex
 	calls   []string
 	answers map[string]answer
+	seq     map[string][]answer
 }
 
 func (s *scripted) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -32,6 +35,13 @@ func (s *scripted) Run(_ context.Context, name string, args ...string) (string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, call)
+	if q := s.seq[call]; len(q) > 0 {
+		a := q[0]
+		if len(q) > 1 {
+			s.seq[call] = q[1:]
+		}
+		return a.out, a.err
+	}
 	a := s.answers[call]
 	return a.out, a.err
 }

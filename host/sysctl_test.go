@@ -75,9 +75,9 @@ func readFile(t *testing.T, root, p string) string {
 func TestSysctlApplyAndRestore(t *testing.T) {
 	t.Parallel()
 	m, root := fixture(t, map[string]string{
-		"/proc/sys/vm/swappiness":                  "60\n",
-		"/proc/sys/net/ipv4/ip_local_port_range":   "32768\t60999\n",
-		"/etc/sysctl.d/99-unrelated.conf":          "kernel.x = 1\n",
+		"/proc/sys/vm/swappiness":                "60\n",
+		"/proc/sys/net/ipv4/ip_local_port_range": "32768\t60999\n",
+		"/etc/sysctl.d/99-unrelated.conf":        "kernel.x = 1\n",
 	})
 	req := applyRequest[sysctlSpec]{Record: "host-sysctl/m-db", Spec: sysctlSpec{Values: map[string]string{
 		"vm.swappiness":                "10",

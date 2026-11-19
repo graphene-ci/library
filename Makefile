@@ -34,6 +34,7 @@ it-host: go.work ## Run the host integration tests as root in a disposable syste
 		--tmpfs /run --tmpfs /run/lock --security-opt label=disable $(HOST_IT_IMAGE)); \
 	trap 'docker rm -f '"$$cid"' >/dev/null' EXIT; \
 	until [ "$$(docker exec $$cid systemctl is-system-running 2>/dev/null || true)" = running ]; do sleep 1; done; \
+	docker exec -e DEBIAN_FRONTEND=noninteractive $$cid sh -c 'apt-get update -qq && apt-get install -y -qq udev && systemctl start systemd-udevd' >/dev/null; \
 	docker cp $(HOST_IT_BIN) $$cid:/host-it.test; \
 	docker exec -e GRAPHENE_HOST_IT=1 $$cid /host-it.test -test.v -test.run TestReal
 

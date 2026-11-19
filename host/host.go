@@ -47,6 +47,7 @@ const (
 	DirKind       entity.KindName = contract.DirKind
 	UnitKind      entity.KindName = contract.UnitKind
 	UnitStateKind entity.KindName = contract.UnitStateKind
+	MountKind     entity.KindName = contract.MountKind
 )
 
 // applyRequest is the input of every apply and remove activity: the
@@ -274,6 +275,16 @@ func registerKind[Spec, Out any](register func(registration), k kindDef[Spec, Ou
 	})
 }
 
+func mountKind() kindDef[mountSpec, MountInfo] {
+	return kindDef[mountSpec, MountInfo]{
+		kind:        MountKind,
+		description: "a filesystem mounted while the record lives (a systemd mount unit), or a check of one mounted by others",
+		tree:        func(s mountSpec) contract.Tree { return s.Tree },
+		apply:       "host.mount.apply", remove: "host.mount.remove",
+		removeOpts: boundedRemove(),
+	}
+}
+
 // recordEntities scopes registration to a pipeline preparation.
 func recordEntities(ctx pipeline.Context) {
 	if ctx.RecordOnce("host.entities") {
@@ -297,6 +308,7 @@ func recordEntitiesOnce(ctx pipeline.Context, m Machine) {
 	registerKind(register, dirKind(), m.applyDir, m.removeDir)
 	registerKind(register, unitKind(), m.applyUnit, m.removeUnit)
 	registerKind(register, unitStateKind(), m.applyUnitState, m.removeUnitState)
+	registerKind(register, mountKind(), m.applyMount, m.removeMount)
 
 	ctx.RecordWorker(func(w worker.Worker, cl client.Client) error {
 		for _, register := range defs {
@@ -425,9 +437,11 @@ func Dir(ctx pipeline.Context, agent pipeline.Agent, path string, access DirAcce
 }
 
 // Unit installs a systemd unit the record owns: the file goes to
-// /etc/systemd/system, the unit is enabled and started; removal stops and
-// disables it and deletes the file. A unit file of that name that exists
-// already is refused. An EnvironmentFile it names is a File record.
+// /etc/systemd/system, the unit is enabled and started, and the record is
+// ready only once it is active; removal stops and disables it and deletes
+// the file. A unit file of that name that exists already is refused. A
+// oneshot service needs RemainAfterExit=yes to count as running. An
+// EnvironmentFile it names is a File record.
 func Unit(ctx pipeline.Context, agent pipeline.Agent, name string, content []byte, opts ...pipeline.ResourceOption) pipeline.Resource[UnitInfo] {
 	spec := unitSpec{Name: name, Content: content}
 	return declare[UnitInfo](ctx, agent, UnitKind, recordName(agent, name), opts,
@@ -443,4 +457,33 @@ func UnitState(ctx pipeline.Context, agent pipeline.Agent, name string, want Uni
 	return declare[UnitStateInfo](ctx, agent, UnitStateKind, recordName(agent, name), opts,
 		func(t contract.Tree) any { spec.Tree = t; return spec },
 		func() error { return validateUnitState(spec) })
+}
+
+// MountRequest is a filesystem on the agent's machine.
+type MountRequest struct {
+	// Device names the disk, best by /dev/disk/by-id (stable across
+	// reboots); the machine's facts list each disk's ids.
+	Device     string
+	Mountpoint string
+	// FSType is ext4, xfs or btrfs.
+	FSType  string
+	Options []string
+	// Format creates the filesystem on a BLANK device. A device carrying
+	// anything — another filesystem, a partition table — is refused,
+	// never formatted over.
+	Format bool
+	// Check only verifies that Device is mounted at Mountpoint with
+	// FSType — a machine someone else prepared; nothing changes, now or
+	// on removal.
+	Check bool
+}
+
+// Mount holds a filesystem mounted at a path while the record lives,
+// through a systemd mount unit (it survives a reboot); removal unmounts
+// and leaves the data. With Check it only verifies an existing mount.
+func Mount(ctx pipeline.Context, agent pipeline.Agent, req MountRequest, opts ...pipeline.ResourceOption) pipeline.Resource[MountInfo] {
+	spec := mountSpec{Device: req.Device, Mountpoint: req.Mountpoint, FSType: req.FSType, Options: req.Options, Format: req.Format, Check: req.Check}
+	return declare[MountInfo](ctx, agent, MountKind, recordName(agent, req.Mountpoint), opts,
+		func(t contract.Tree) any { spec.Tree = t; return spec },
+		func() error { return validateMount(spec) })
 }
